@@ -19,9 +19,9 @@
 
 #pragma once
 
-#include <version.hpp>
-#include <CL/sycl.hpp>
-#include <ext/intel/esimd.hpp>
+#include <sycl/ext/intel/esimd.hpp>
+#include <sycl/sycl.hpp>
+namespace cl { namespace sycl = ::sycl; }
 
 template <class T>
 using remove_const_t = typename std::remove_const<T>::type;

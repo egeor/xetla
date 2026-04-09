@@ -22,3 +22,4 @@
 #include "experimental/group/gemm/common.hpp"
 #include "experimental/group/gemm/compute_policy.hpp"
 #include "experimental/group/gemm/impl/int4_dequantize_xmx_xe.hpp"
+#include "experimental/group/gemm/impl/int2_bf16_dpas_xmx_xe.hpp"

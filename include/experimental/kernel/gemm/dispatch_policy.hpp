@@ -42,6 +42,16 @@ struct dispatch_policy_int4_dequantize_kslicing {
     static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
 };
 
+template <typename group_swizzle_policy_, int num_global_kslicing_ = 1,
+        int num_local_kslicing_ = 1, bool use_external_scale_a_ = false>
+struct dispatch_policy_int2_bf16_dpas_kslicing {
+    using group_swizzle_policy = group_swizzle_policy_;
+    static constexpr int num_global_kslicing = num_global_kslicing_;
+    static constexpr int num_local_kslicing = num_local_kslicing_;
+    static constexpr bool use_external_scale_a = use_external_scale_a_;
+    static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
+};
+
 /// @} xetla_gemm
 
 } // namespace gpu::xetla::kernel

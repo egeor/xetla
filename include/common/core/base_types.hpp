@@ -206,6 +206,12 @@ concept xetla_matrix_ref
 
 /// @} xetla_core_base_types
 
+/// @brief Get the number of elements packed in a type.
+template <typename T>
+struct get_packed_num {
+    static constexpr uint32_t value = 1;
+};
+
 } // namespace gpu::xetla
 
 #if (__LIBSYCL_MAJOR_VERSION > 7) \

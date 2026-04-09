@@ -32,7 +32,7 @@ namespace gpu::xetla::subgroup {
 /// @tparam arch_tag Is the hardware architecture tag.
 template <typename matAcc_dst_t, typename matAcc_src_t, typename matB_t,
         typename matA_t, mma_engine engine, gpu_arch arch_tag,
-        typename enable = void>
+        typename enable = void, typename custom_mma_attr = void>
 struct tile_mma_t {};
 
 /// @brief Is to illustrate the memory information
@@ -112,5 +112,85 @@ struct tile_t : public tile_desc_ {
     inline tile_t() = default;
     __XETLA_API void init(native_type_t<dtype> val) { this->reg = val; }
 };
+
+// Elementwise scale output: convert int32 accumulator to float using per-row/per-col scales
+template <typename T_dst, typename T_src>
+__XETLA_API typename std::enable_if_t<std::is_same<std::remove_cv_t<typename T_dst::dtype>, float>::value && std::is_same<std::remove_cv_t<typename T_src::dtype>, int32_t>::value, void> elemwise_scale_output(
+        T_dst &dst, T_src &src, float scale_A, float scale_B) {
+    constexpr uint32_t elems = T_src::tile_elems;
+    using interm_t = float;
+    auto intermediate = xetla_cvt<interm_t, typename T_src::dtype, elems>(src.reg);
+#pragma unroll
+    for (int i = 0; i < static_cast<int>(elems); ++i) {
+        intermediate[i] = intermediate[i] * scale_A * scale_B;
+    }
+    dst.reg += xetla_cvt<typename T_dst::dtype, interm_t, elems>(intermediate);
+}
+
+// Overload: scaleA is a tile of per-row scales and scaleB is a tile of per-column scales
+template <typename T_dst, typename T_src, typename T_scaleA, typename T_scaleB>
+__XETLA_API typename std::enable_if_t<(std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, bf16>) && std::is_same<std::remove_cv_t<typename T_src::dtype>, int32_t>::value
+                && std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value && std::is_same<std::remove_cv_t<typename T_scaleB::dtype>, float>::value,
+        void>
+elemwise_scale_output(T_dst &dst, T_src &src, const T_scaleA &scaleA, const T_scaleB &scaleB) {
+    using interm_t = float;
+    constexpr uint32_t elems = T_src::tile_desc::tile_elems;
+    constexpr uint32_t block_size_x = T_dst::tile_desc::block_size_x;
+    constexpr uint32_t block_size_y = T_dst::tile_desc::block_size_y;
+    constexpr uint32_t block_elems = T_dst::tile_desc::block_elems;
+    constexpr uint32_t num_block_x = T_dst::tile_desc::num_block_x;
+    constexpr uint32_t num_block_y = T_dst::tile_desc::num_block_y;
+    constexpr int simd = (block_size_x > 16) ? 16 : block_size_x;
+    auto scaleB_reg = scaleB.reg;
+    auto intermediate = xetla_cvt<interm_t, typename T_src::dtype, elems>(src.reg);
+#pragma unroll
+    for (int i = 0; i < num_block_y; ++i) {
+#pragma unroll
+        for (int j = 0; j < num_block_x; ++j) {
+#pragma unroll
+            for (int ii = 0; ii < block_size_y; ++ii) {
+                auto scaleA_val = static_cast<interm_t>(1.0f/scaleA.reg[i * block_size_y + ii]);
+                auto scaleA_vec = xetla_vector<interm_t, simd>(scaleA_val);
+#pragma unroll
+                for (int jj = 0; jj < block_size_x; jj += simd) {
+                    auto scaleB_vec = scaleB_reg.xetla_select<simd, 1>(j * block_size_x + jj).xetla_format<interm_t>();
+                    intermediate.xetla_select<simd, 1>((i * num_block_x + j) * block_elems + ii * block_size_x + jj) *= scaleB_vec * scaleA_vec;
+                }
+            }
+        }
+    }
+    dst.reg += xetla_cvt<typename T_dst::dtype, interm_t, elems>(intermediate);
+}
+
+// Convert bf16 tile to int8 tile using per-row reciprocal scales
+template <typename T_dst, typename T_src, typename T_scaleA>
+__XETLA_API typename std::enable_if_t<
+        std::is_same<std::remove_cv_t<typename T_src::dtype>, bf16>::value &&
+        std::is_same<std::remove_cv_t<typename T_dst::dtype>, int8_t>::value &&
+        std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value,
+        void>
+elemwise_scale_bf16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA) {
+    using interm_t = float;
+    constexpr uint32_t block_size_x = T_src::block_size_x;
+    constexpr uint32_t block_size_y = T_src::block_size_y;
+    constexpr uint32_t block_elems = T_src::block_elems;
+    constexpr uint32_t num_block_x = T_src::num_block_x;
+    constexpr uint32_t num_block_y = T_src::num_block_y;
+#pragma unroll
+    for (int ib = 0; ib < static_cast<int>(num_block_y); ++ib) {
+#pragma unroll
+        for (int jb = 0; jb < static_cast<int>(num_block_x); ++jb) {
+#pragma unroll
+            for (int ii = 0; ii < static_cast<int>(block_size_y); ++ii) {
+                const uint32_t row = ib * block_size_y + ii;
+                interm_t s_val = static_cast<interm_t>(scaleA.reg[row]);
+                auto s_vec = xetla_vector<interm_t, block_size_x>(s_val);
+                const uint32_t idx = (ib * num_block_x + jb) * block_elems + ii * block_size_x;
+                auto src_reg = src.reg;
+                dst.reg.xetla_select<block_size_x, 1>(idx) = xetla_sat<typename T_dst::dtype, interm_t, block_size_x>(src_reg.xetla_select<block_size_x, 1>(idx) * s_vec);
+            }
+        }
+    }
+}
 
 } // namespace gpu::xetla::subgroup

@@ -49,11 +49,11 @@ struct load_store_attr_t<msg_type::block_2d, gpu_arch::Xe> {
     static constexpr uint32_t alignment_in_bytes = 8;
 };
 
-template <gpu_arch arch_tag>
+template <gpu_arch arch_tag, uint32_t mma_m = 8>
 struct mma_attr_t {};
-template <>
-struct mma_attr_t<gpu_arch::Xe> {
-    static constexpr uint32_t mma_m_in_elem = 8;
+template <uint32_t mma_m>
+struct mma_attr_t<gpu_arch::Xe, mma_m> {
+    static constexpr uint32_t mma_m_in_elem = mma_m;
     static constexpr uint32_t mma_n_in_elem = 16;
     static constexpr uint32_t mma_k_in_bytes = 32;
 };

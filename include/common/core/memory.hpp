@@ -81,6 +81,8 @@ constexpr __ESIMD_NS::memory_kind get_memory_kind(gpu::xetla::memory_kind mk) {
             return __ESIMD_NS::memory_kind::image;
         case gpu::xetla::memory_kind::shared_local:
             return __ESIMD_NS::memory_kind::local;
+        default:
+            return __ESIMD_NS::memory_kind::global;
     }
 }
 
@@ -97,6 +99,8 @@ constexpr __ESIMD_NS::fence_flush_op get_fence_op(gpu::xetla::fence_op fo) {
             return __ESIMD_NS::fence_flush_op::invalidate;
         case gpu::xetla::fence_op::clean:
             return __ESIMD_NS::fence_flush_op::clean;
+        default:
+            return __ESIMD_NS::fence_flush_op::none;
     }
 }
 

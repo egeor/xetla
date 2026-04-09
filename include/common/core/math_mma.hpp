@@ -25,6 +25,11 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 
 namespace gpu::xetla {
+
+// Forward declaration for int2 types
+struct int2x4;
+struct int2x16;
+
 namespace detail {
 
 ///
@@ -62,6 +67,16 @@ constexpr gpu::xetla::argument_type mma_argument_type<bf16>() {
 }
 
 template <>
+constexpr gpu::xetla::argument_type mma_argument_type<int2x4>() {
+    return gpu::xetla::argument_type::S8;
+}
+
+template <>
+constexpr gpu::xetla::argument_type mma_argument_type<int2x16>() {
+    return gpu::xetla::argument_type::S2;
+}
+
+template <>
 constexpr gpu::xetla::argument_type mma_argument_type<fp16>() {
     return gpu::xetla::argument_type::FP16;
 }
@@ -85,9 +100,15 @@ constexpr __ESIMD_NS::xmx::dpas_argument_type get_argument_type() {
             "Unsupported argument type");
     switch (arg_type) {
         case gpu::xetla::argument_type::U1:
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
             return __ESIMD_NS::xmx::dpas_argument_type::u1;
+#pragma clang diagnostic pop
         case gpu::xetla::argument_type::S1:
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
             return __ESIMD_NS::xmx::dpas_argument_type::s1;
+#pragma clang diagnostic pop
         case gpu::xetla::argument_type::U2:
             return __ESIMD_NS::xmx::dpas_argument_type::u2;
         case gpu::xetla::argument_type::S2:

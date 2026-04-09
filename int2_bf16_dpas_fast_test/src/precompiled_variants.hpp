@@ -14,12 +14,23 @@
 * limitations under the License.
 *******************************************************************************/
 
-/// @file
-/// C++ API
-
 #pragma once
 
-#include "experimental/kernel/gemm/common.hpp"
-#include "experimental/kernel/gemm/dispatch_policy.hpp"
-#include "experimental/kernel/gemm/impl/int4_dequantize_kslicing_xe.hpp"
-#include "experimental/kernel/gemm/impl/int2_bf16_dpas_kslicing_xe.hpp"
+#include <vector>
+#include <functional>
+
+// Forward declaration of Variant struct
+struct Variant {
+    uint32_t wg_m, sg_m, wg_n, sg_n, sg_k, gks;
+    bool is_gemv;
+    std::function<void(int, int, bool)> run_func;
+};
+
+// Function to build GEMM variants (implemented in precompiled_gemm.cpp)
+void build_gemm_variants(std::vector<Variant>& variants);
+
+// Function to build GEMV variants (implemented in precompiled_gemv.cpp)
+void build_gemv_variants(std::vector<Variant>& variants);
+
+// Function to get all precompiled variants (implemented in variant_registry.cpp)
+std::vector<Variant> get_precompiled_variants();
