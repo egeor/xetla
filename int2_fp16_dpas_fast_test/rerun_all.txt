@@ -1,0 +1,1200 @@
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=128
+Requested sg_n=128
+Requested sg_k=32
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x2048 * 2048x4096
+Global K-slicing: 1
+Subgroup K tile: 32 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 45
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=128 sg_n=128 sg_k=32 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 128
+  sg_m = 8, sg_n = 128, sg_k = 32
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x2048 * 2048x4096
+Memory per matrix set: 30.125 MB
+Number of matrix sets (auto-calculated for ~2GB): 45
+Total memory usage: 1.32385 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 45 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.101516 ms
+  Average Bandwidth per set: 19.2397 GB/s
+  Average GFLOPS per set: 169234 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0840391 ms
+  Average device GEMM time per set: 0.0692664 ms
+  Average device GEMM flops per set: 248026 GFLOPS
+  Average device GEMM Bandwidth per set: 84.8673 GB/s
+  Average device AbsMax time per set: 0.0147727 ms
+  Average device AbsMax Bandwidth per set: 264.423 GB/s
+  Average device Bandwidth per set: 69.949 GB/s
+  Average device GFLOPS per set: 204427 GFLOPS
+Device efficiency: 82.7845%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 2048
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=32
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x2048 * 2048x2048
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 82
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=32 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 32, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=2048 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x2048 * 2048x2048
+Memory per matrix set: 17.0625 MB
+Number of matrix sets (auto-calculated for ~2GB): 82
+Total memory usage: 1.36633 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 82 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0670867 ms
+  Average Bandwidth per set: 14.5567 GB/s
+  Average GFLOPS per set: 128042 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0497111 ms
+  Average device GEMM time per set: 0.0360218 ms
+  Average device GEMM flops per set: 238465 GFLOPS
+  Average device GEMM Bandwidth per set: 135.869 GB/s
+  Average device AbsMax time per set: 0.0136893 ms
+  Average device AbsMax Bandwidth per set: 285.351 GB/s
+  Average device Bandwidth per set: 98.4541 GB/s
+  Average device GFLOPS per set: 172797 GFLOPS
+Device efficiency: 74.0998%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 8192
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=32
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x2048 * 2048x8192
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 24
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=32 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 32, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=8192 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x2048 * 2048x8192
+Memory per matrix set: 56.25 MB
+Number of matrix sets (auto-calculated for ~2GB): 24
+Total memory usage: 1.31836 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 24 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.180891 ms
+  Average Bandwidth per set: 21.5945 GB/s
+  Average GFLOPS per set: 189948 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.162851 ms
+  Average device GEMM time per set: 0.147691 ms
+  Average device GEMM flops per set: 232646 GFLOPS
+  Average device GEMM Bandwidth per set: 53.13 GB/s
+  Average device AbsMax time per set: 0.0151595 ms
+  Average device AbsMax Bandwidth per set: 257.677 GB/s
+  Average device Bandwidth per set: 48.1842 GB/s
+  Average device GFLOPS per set: 210989 GFLOPS
+Device efficiency: 90.0271%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 2048
+Matrix K dimension set to: 8192
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x8192 * 8192x2048
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 52
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=2048 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x8192 * 8192x2048
+Memory per matrix set: 32.0625 MB
+Number of matrix sets (auto-calculated for ~2GB): 52
+Total memory usage: 1.62817 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 52 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.198224 ms
+  Average Bandwidth per set: 19.7063 GB/s
+  Average GFLOPS per set: 173338 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.178068 ms
+  Average device GEMM time per set: 0.13434 ms
+  Average device GEMM flops per set: 255767 GFLOPS
+  Average device GEMM Bandwidth per set: 145.472 GB/s
+  Average device AbsMax time per set: 0.0437276 ms
+  Average device AbsMax Bandwidth per set: 357.325 GB/s
+  Average device Bandwidth per set: 109.749 GB/s
+  Average device GFLOPS per set: 192959 GFLOPS
+Device efficiency: 89.8317%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 2240
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=256
+Requested sg_m=8
+Requested wg_n=160
+Requested sg_n=160
+Requested sg_k=32
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x1600 * 1600x2240
+Global K-slicing: 1
+Subgroup K tile: 32 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 80
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=256 sg_m=8 wg_n=160 sg_n=160 sg_k=32 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 256, wg_n = 160
+  sg_m = 8, sg_n = 160, sg_k = 32
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=2240 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x1600 * 1600x2240
+Memory per matrix set: 17.1592 MB
+Number of matrix sets (auto-calculated for ~2GB): 80
+Total memory usage: 1.34056 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 80 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.064344 ms
+  Average Bandwidth per set: 12.9688 GB/s
+  Average GFLOPS per set: 114075 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0470631 ms
+  Average device GEMM time per set: 0.0359393 ms
+  Average device GEMM flops per set: 204234 GFLOPS
+  Average device GEMM Bandwidth per set: 108.471 GB/s
+  Average device AbsMax time per set: 0.0111238 ms
+  Average device AbsMax Bandwidth per set: 274.344 GB/s
+  Average device Bandwidth per set: 82.8331 GB/s
+  Average device GFLOPS per set: 155962 GFLOPS
+Device efficiency: 73.143%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 1600
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=32
+Requested sg_m=8
+Requested wg_n=160
+Requested sg_n=160
+Requested sg_k=32
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x1600 * 1600x1600
+Global K-slicing: 1
+Subgroup K tile: 32 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 106
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=32 sg_m=8 wg_n=160 sg_n=160 sg_k=32 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 32, wg_n = 160
+  sg_m = 8, sg_n = 160, sg_k = 32
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=1600 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x1600 * 1600x1600
+Memory per matrix set: 13.1494 MB
+Number of matrix sets (auto-calculated for ~2GB): 106
+Total memory usage: 1.36117 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 106 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0628403 ms
+  Average Bandwidth per set: 9.48509 GB/s
+  Average GFLOPS per set: 83431.8 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0451169 ms
+  Average device GEMM time per set: 0.0341164 ms
+  Average device GEMM flops per set: 153676 GFLOPS
+  Average device GEMM Bandwidth per set: 107.209 GB/s
+  Average device AbsMax time per set: 0.0110005 ms
+  Average device AbsMax Bandwidth per set: 277.419 GB/s
+  Average device Bandwidth per set: 81.0689 GB/s
+  Average device GFLOPS per set: 116206 GFLOPS
+Device efficiency: 71.7961%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 4352
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=32
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x1600 * 1600x4352
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 44
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=32 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 32, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=4352 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x1600 * 1600x4352
+Memory per matrix set: 30.418 MB
+Number of matrix sets (auto-calculated for ~2GB): 44
+Total memory usage: 1.30702 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 44 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.100366 ms
+  Average Bandwidth per set: 16.1534 GB/s
+  Average GFLOPS per set: 142087 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0832531 ms
+  Average device GEMM time per set: 0.0710209 ms
+  Average device GEMM flops per set: 200795 GFLOPS
+  Average device GEMM Bandwidth per set: 66.0795 GB/s
+  Average device AbsMax time per set: 0.0122322 ms
+  Average device AbsMax Bandwidth per set: 249.486 GB/s
+  Average device Bandwidth per set: 56.3706 GB/s
+  Average device GFLOPS per set: 171293 GFLOPS
+Device efficiency: 82.9498%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 1600
+Matrix K dimension set to: 4352
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=160
+Requested sg_n=160
+Requested sg_k=32
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x4352 * 4352x1600
+Global K-slicing: 1
+Subgroup K tile: 32 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 80
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=160 sg_n=160 sg_k=32 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 160
+  sg_m = 8, sg_n = 160, sg_k = 32
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=1600 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x4352 * 4352x1600
+Memory per matrix set: 19.5742 MB
+Number of matrix sets (auto-calculated for ~2GB): 80
+Total memory usage: 1.52924 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 80 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.117256 ms
+  Average Bandwidth per set: 13.8265 GB/s
+  Average GFLOPS per set: 121619 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0995098 ms
+  Average device GEMM time per set: 0.076377 ms
+  Average device GEMM flops per set: 186714 GFLOPS
+  Average device GEMM Bandwidth per set: 130.036 GB/s
+  Average device AbsMax time per set: 0.0231327 ms
+  Average device AbsMax Bandwidth per set: 358.833 GB/s
+  Average device Bandwidth per set: 99.8073 GB/s
+  Average device GFLOPS per set: 143309 GFLOPS
+Device efficiency: 84.8651%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 6144
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x4096 * 4096x6144
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 28
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=6144 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x4096 * 4096x6144
+Memory per matrix set: 50.1875 MB
+Number of matrix sets (auto-calculated for ~2GB): 28
+Total memory usage: 1.37231 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 28 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.24738 ms
+  Average Bandwidth per set: 23.6857 GB/s
+  Average GFLOPS per set: 208342 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.229205 ms
+  Average device GEMM time per set: 0.203643 ms
+  Average device GEMM flops per set: 253087 GFLOPS
+  Average device GEMM Bandwidth per set: 67.2675 GB/s
+  Average device AbsMax time per set: 0.0255611 ms
+  Average device AbsMax Bandwidth per set: 305.64 GB/s
+  Average device Bandwidth per set: 59.7657 GB/s
+  Average device GFLOPS per set: 224863 GFLOPS
+Device efficiency: 92.6527%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x4096 * 4096x4096
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 40
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x4096 * 4096x4096
+Memory per matrix set: 36.125 MB
+Number of matrix sets (auto-calculated for ~2GB): 40
+Total memory usage: 1.41113 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 40 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.178487 ms
+  Average Bandwidth per set: 21.8853 GB/s
+  Average GFLOPS per set: 192505 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.160196 ms
+  Average device GEMM time per set: 0.136252 ms
+  Average device GEMM flops per set: 252178 GFLOPS
+  Average device GEMM Bandwidth per set: 86.148 GB/s
+  Average device AbsMax time per set: 0.0239442 ms
+  Average device AbsMax Bandwidth per set: 326.279 GB/s
+  Average device Bandwidth per set: 73.2716 GB/s
+  Average device GFLOPS per set: 214485 GFLOPS
+Device efficiency: 89.7522%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 14336
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x4096 * 4096x14336
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 13
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=14336 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x4096 * 4096x14336
+Memory per matrix set: 106.438 MB
+Number of matrix sets (auto-calculated for ~2GB): 13
+Total memory usage: 1.35126 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 13 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.51116 ms
+  Average Bandwidth per set: 26.7468 GB/s
+  Average GFLOPS per set: 235267 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.491942 ms
+  Average device GEMM time per set: 0.465461 ms
+  Average device GEMM flops per set: 258365 GFLOPS
+  Average device GEMM Bandwidth per set: 46.2801 GB/s
+  Average device AbsMax time per set: 0.0264807 ms
+  Average device AbsMax Bandwidth per set: 295.026 GB/s
+  Average device Bandwidth per set: 43.7889 GB/s
+  Average device GFLOPS per set: 244458 GFLOPS
+Device efficiency: 96.2404%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1024
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 14336
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=64
+Requested sg_m=8
+Requested wg_n=256
+Requested sg_n=128
+Requested sg_k=64
+Scale A calculation mode set to: external (separate kernel)
+Number of iterations set to: 20
+Matrix dimensions: 1024x14336 * 14336x4096
+Global K-slicing: 1
+Subgroup K tile: 64 (GEMM, always 32)
+Auto-calculated matrix sets for ~2GB: 25
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=64 sg_m=8 wg_n=256 sg_n=128 sg_k=64 gks=1 is_gemv=0
+Scale A calculation mode: external (separate kernel)
+Tile size configuration:
+  wg_m = 64, wg_n = 256
+  sg_m = 8, sg_n = 128, sg_k = 64
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1024, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1024x14336 * 14336x4096
+Memory per matrix set: 66.125 MB
+Number of matrix sets (auto-calculated for ~2GB): 25
+Total memory usage: 1.61438 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 25 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.569117 ms
+  Average Bandwidth per set: 24.023 GB/s
+  Average GFLOPS per set: 211308 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.549298 ms
+  Average device GEMM time per set: 0.45522 ms
+  Average device GEMM flops per set: 264178 GFLOPS
+  Average device GEMM Bandwidth per set: 90.1425 GB/s
+  Average device AbsMax time per set: 0.0940776 ms
+  Average device AbsMax Bandwidth per set: 290.651 GB/s
+  Average device Bandwidth per set: 74.7039 GB/s
+  Average device GFLOPS per set: 218932 GFLOPS
+Device efficiency: 96.5176%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=16
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x2048 * 2048x4096
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 1003
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=16 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 16, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x2048 * 2048x4096
+Memory per matrix set: 2.03516 MB
+Number of matrix sets (auto-calculated for ~2GB): 1003
+Total memory usage: 1.99342 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 1003 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0126622 ms
+  Average Bandwidth per set: 154.249 GB/s
+  Average GFLOPS per set: 1324.99 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00617032 ms
+  Average device GEMM time per set: 0.00617032 ms
+  Average device GEMM flops per set: 2719.02 GFLOPS
+  Average device GEMM Bandwidth per set: 319.627 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 319.627 GB/s
+  Average device GFLOPS per set: 2719.02 GFLOPS
+Device efficiency: 48.7303%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 2048
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=32
+Requested sg_n=16
+Requested sg_k=256
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x2048 * 2048x2048
+Global K-slicing: 1
+Subgroup K tile: 256 (GEMV)
+Auto-calculated matrix sets for ~2GB: 2002
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=32 sg_n=16 sg_k=256 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 32
+  sg_m = 1, sg_n = 16, sg_k = 256
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=2048 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x2048 * 2048x2048
+Memory per matrix set: 1.01953 MB
+Number of matrix sets (auto-calculated for ~2GB): 2002
+Total memory usage: 1.99326 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 2002 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0109366 ms
+  Average Bandwidth per set: 89.293 GB/s
+  Average GFLOPS per set: 767.021 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00456721 ms
+  Average device GEMM time per set: 0.00456721 ms
+  Average device GEMM flops per set: 1836.7 GFLOPS
+  Average device GEMM Bandwidth per set: 216.327 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 216.327 GB/s
+  Average device GFLOPS per set: 1836.7 GFLOPS
+Device efficiency: 41.7607%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 8192
+Matrix K dimension set to: 2048
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=32
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x2048 * 2048x8192
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 502
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=32 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 32, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=8192 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x2048 * 2048x8192
+Memory per matrix set: 4.05859 MB
+Number of matrix sets (auto-calculated for ~2GB): 502
+Total memory usage: 1.98966 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 502 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0179647 ms
+  Average Bandwidth per set: 217.441 GB/s
+  Average GFLOPS per set: 1867.8 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0100774 ms
+  Average device GEMM time per set: 0.0100774 ms
+  Average device GEMM flops per set: 3329.66 GFLOPS
+  Average device GEMM Bandwidth per set: 391.03 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 391.03 GB/s
+  Average device GFLOPS per set: 3329.66 GFLOPS
+Device efficiency: 56.0959%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 2048
+Matrix K dimension set to: 8192
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=32
+Requested sg_k=256
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x8192 * 8192x2048
+Global K-slicing: 1
+Subgroup K tile: 256 (GEMV)
+Auto-calculated matrix sets for ~2GB: 508
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=32 sg_k=256 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 32, sg_k = 256
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=2048 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x8192 * 8192x2048
+Memory per matrix set: 4.0293 MB
+Number of matrix sets (auto-calculated for ~2GB): 508
+Total memory usage: 1.99891 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 508 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0220102 ms
+  Average Bandwidth per set: 177.475 GB/s
+  Average GFLOPS per set: 1524.5 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.013104 ms
+  Average device GEMM time per set: 0.013104 ms
+  Average device GEMM flops per set: 2560.63 GFLOPS
+  Average device GEMM Bandwidth per set: 299.843 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 299.843 GB/s
+  Average device GFLOPS per set: 2560.63 GFLOPS
+Device efficiency: 59.536%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 2240
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=32
+Requested sg_n=16
+Requested sg_k=160
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x1600 * 1600x2240
+Global K-slicing: 1
+Subgroup K tile: 160 (GEMV)
+Auto-calculated matrix sets for ~2GB: 2331
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=32 sg_n=16 sg_k=160 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 32
+  sg_m = 1, sg_n = 16, sg_k = 160
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=2240 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x1600 * 1600x2240
+Memory per matrix set: 0.874634 MB
+Number of matrix sets (auto-calculated for ~2GB): 2331
+Total memory usage: 1.99099 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 2331 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0107328 ms
+  Average Bandwidth per set: 77.7493 GB/s
+  Average GFLOPS per set: 667.861 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00436407 ms
+  Average device GEMM time per set: 0.00436407 ms
+  Average device GEMM flops per set: 1642.5 GFLOPS
+  Average device GEMM Bandwidth per set: 193.808 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 193.808 GB/s
+  Average device GFLOPS per set: 1642.5 GFLOPS
+Device efficiency: 40.6612%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 1600
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=32
+Requested sg_n=16
+Requested sg_k=160
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x1600 * 1600x1600
+Global K-slicing: 1
+Subgroup K tile: 160 (GEMV)
+Auto-calculated matrix sets for ~2GB: 3258
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=32 sg_n=16 sg_k=160 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 32
+  sg_m = 1, sg_n = 16, sg_k = 160
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=1600 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x1600 * 1600x1600
+Memory per matrix set: 0.62561 MB
+Number of matrix sets (auto-calculated for ~2GB): 3258
+Total memory usage: 1.99047 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 3258 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.010574 ms
+  Average Bandwidth per set: 56.3689 GB/s
+  Average GFLOPS per set: 484.205 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00405332 ms
+  Average device GEMM time per set: 0.00405332 ms
+  Average device GEMM flops per set: 1263.16 GFLOPS
+  Average device GEMM Bandwidth per set: 149.258 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 149.258 GB/s
+  Average device GFLOPS per set: 1263.16 GFLOPS
+Device efficiency: 38.3328%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 4352
+Matrix K dimension set to: 1600
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=16
+Requested sg_k=160
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x1600 * 1600x4352
+Global K-slicing: 1
+Subgroup K tile: 160 (GEMV)
+Auto-calculated matrix sets for ~2GB: 1202
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=16 sg_k=160 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 16, sg_k = 160
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=4352 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x1600 * 1600x4352
+Memory per matrix set: 1.69641 MB
+Number of matrix sets (auto-calculated for ~2GB): 1202
+Total memory usage: 1.9913 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 1202 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0130338 ms
+  Average Bandwidth per set: 124.388 GB/s
+  Average GFLOPS per set: 1068.48 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00604976 ms
+  Average device GEMM time per set: 0.00604976 ms
+  Average device GEMM flops per set: 2301.98 GFLOPS
+  Average device GEMM Bandwidth per set: 271.158 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 271.158 GB/s
+  Average device GFLOPS per set: 2301.98 GFLOPS
+Device efficiency: 46.4158%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 1600
+Matrix K dimension set to: 4352
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=32
+Requested sg_n=32
+Requested sg_k=256
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x4352 * 4352x1600
+Global K-slicing: 1
+Subgroup K tile: 256 (GEMV)
+Auto-calculated matrix sets for ~2GB: 1217
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=32 sg_n=32 sg_k=256 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 32
+  sg_m = 1, sg_n = 32, sg_k = 256
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=1600 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x4352 * 4352x1600
+Memory per matrix set: 1.67914 MB
+Number of matrix sets (auto-calculated for ~2GB): 1217
+Total memory usage: 1.99562 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 1217 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0139388 ms
+  Average Bandwidth per set: 116.312 GB/s
+  Average GFLOPS per set: 999.112 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.00674448 ms
+  Average device GEMM time per set: 0.00674448 ms
+  Average device GEMM flops per set: 2064.86 GFLOPS
+  Average device GEMM Bandwidth per set: 242.467 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 242.467 GB/s
+  Average device GFLOPS per set: 2064.86 GFLOPS
+Device efficiency: 48.3864%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 6144
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=16
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x4096 * 4096x6144
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 338
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=16 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 16, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=6144 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x4096 * 4096x6144
+Memory per matrix set: 6.05469 MB
+Number of matrix sets (auto-calculated for ~2GB): 338
+Total memory usage: 1.99852 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 338 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0212657 ms
+  Average Bandwidth per set: 275.531 GB/s
+  Average GFLOPS per set: 2366.8 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0136135 ms
+  Average device GEMM time per set: 0.0136135 ms
+  Average device GEMM flops per set: 3697.2 GFLOPS
+  Average device GEMM Bandwidth per set: 432.652 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 432.652 GB/s
+  Average device GFLOPS per set: 3697.2 GFLOPS
+Device efficiency: 64.0159%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=16
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x4096 * 4096x4096
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 507
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=16 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 16, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x4096 * 4096x4096
+Memory per matrix set: 4.03906 MB
+Number of matrix sets (auto-calculated for ~2GB): 507
+Total memory usage: 1.99981 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 507 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0177171 ms
+  Average Bandwidth per set: 220.48 GB/s
+  Average GFLOPS per set: 1893.91 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0100932 ms
+  Average device GEMM time per set: 0.0100932 ms
+  Average device GEMM flops per set: 3324.45 GFLOPS
+  Average device GEMM Bandwidth per set: 389.285 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 389.285 GB/s
+  Average device GFLOPS per set: 3324.45 GFLOPS
+Device efficiency: 56.969%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 14336
+Matrix K dimension set to: 4096
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=32
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x4096 * 4096x14336
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 145
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=32 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 32, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=14336 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x4096 * 4096x14336
+Memory per matrix set: 14.1035 MB
+Number of matrix sets (auto-calculated for ~2GB): 145
+Total memory usage: 1.99708 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 145 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0374825 ms
+  Average Bandwidth per set: 364.753 GB/s
+  Average GFLOPS per set: 3133.21 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.0284371 ms
+  Average device GEMM time per set: 0.0284371 ms
+  Average device GEMM flops per set: 4129.84 GFLOPS
+  Average device GEMM Bandwidth per set: 482.923 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 482.923 GB/s
+  Average device GFLOPS per set: 4129.84 GFLOPS
+Device efficiency: 75.8676%
+Test PASSED
+Validation disabled via command line argument
+Matrix M dimension set to: 1
+Matrix N dimension set to: 4096
+Matrix K dimension set to: 14336
+Global K-slicing set to: 1
+Runtime scale_gs set to: 1
+Requested wg_m=1
+Requested sg_m=1
+Requested wg_n=128
+Requested sg_n=16
+Requested sg_k=128
+Scale A calculation mode set to: internal (SLM within GEMM)
+Number of iterations set to: 20
+Matrix dimensions: 1x14336 * 14336x4096
+Global K-slicing: 1
+Subgroup K tile: 128 (GEMV)
+Auto-calculated matrix sets for ~2GB: 146
+Running int2 test with global_kslicing=1
+Found matching precompiled variant: wg_m=1 sg_m=1 wg_n=128 sg_n=16 sg_k=128 gks=1 is_gemv=1
+Scale A calculation mode: internal (SLM)
+Tile size configuration:
+  wg_m = 1, wg_n = 128
+  sg_m = 1, sg_n = 16, sg_k = 128
+  scale_gs = 1
+Scale tensor sizes: size_scale_a=1, size_scale_b=4096 (ks_groups=1)
+Running int2 dequantization on Intel(R) Graphics [0xe223]
+Matrix dimensions: 1x14336 * 14336x4096
+Memory per matrix set: 14.0586 MB
+Number of matrix sets (auto-calculated for ~2GB): 146
+Total memory usage: 2.00445 GB
+Starting allocations
+Done with allocations
+Done with initialization
+Int2 validation skipped (disabled via command line argument)
+Benchmarking 146 int2 matrix sets
+Host-side timing (over 20 iterations):
+  Average time per set: 0.0378268 ms
+  Average Bandwidth per set: 361.433 GB/s
+  Average GFLOPS per set: 3104.69 GFLOPS
+Device-only timing (per set, averaged over iterations):
+  Average device time per set: 0.029263 ms
+  Average device GEMM time per set: 0.029263 ms
+  Average device GEMM flops per set: 4013.28 GFLOPS
+  Average device GEMM Bandwidth per set: 468.642 GB/s
+  Average device AbsMax time per set: 0 ms
+  Average device AbsMax Bandwidth per set: inf GB/s
+  Average device Bandwidth per set: 468.642 GB/s
+  Average device GFLOPS per set: 4013.28 GFLOPS
+Device efficiency: 77.3603%
+Test PASSED

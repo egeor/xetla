@@ -23,3 +23,4 @@
 #include "experimental/kernel/gemm/dispatch_policy.hpp"
 #include "experimental/kernel/gemm/impl/int4_dequantize_kslicing_xe.hpp"
 #include "experimental/kernel/gemm/impl/int2_bf16_dpas_kslicing_xe.hpp"
+#include "experimental/kernel/gemm/impl/int2_fp16_dpas_kslicing_xe.hpp"

@@ -193,4 +193,35 @@ elemwise_scale_bf16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA
     }
 }
 
+// Convert fp16 tile to int8 tile using per-row reciprocal scales
+template <typename T_dst, typename T_src, typename T_scaleA>
+__XETLA_API typename std::enable_if_t<
+        std::is_same<std::remove_cv_t<typename T_src::dtype>, fp16>::value &&
+        std::is_same<std::remove_cv_t<typename T_dst::dtype>, int8_t>::value &&
+        std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value,
+        void>
+elemwise_scale_fp16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA) {
+    using interm_t = float;
+    constexpr uint32_t block_size_x = T_src::block_size_x;
+    constexpr uint32_t block_size_y = T_src::block_size_y;
+    constexpr uint32_t block_elems = T_src::block_elems;
+    constexpr uint32_t num_block_x = T_src::num_block_x;
+    constexpr uint32_t num_block_y = T_src::num_block_y;
+#pragma unroll
+    for (int ib = 0; ib < static_cast<int>(num_block_y); ++ib) {
+#pragma unroll
+        for (int jb = 0; jb < static_cast<int>(num_block_x); ++jb) {
+#pragma unroll
+            for (int ii = 0; ii < static_cast<int>(block_size_y); ++ii) {
+                const uint32_t row = ib * block_size_y + ii;
+                interm_t s_val = static_cast<interm_t>(scaleA.reg[row]);
+                auto s_vec = xetla_vector<interm_t, block_size_x>(s_val);
+                const uint32_t idx = (ib * num_block_x + jb) * block_elems + ii * block_size_x;
+                auto src_reg = src.reg;
+                dst.reg.xetla_select<block_size_x, 1>(idx) = xetla_sat<typename T_dst::dtype, interm_t, block_size_x>(xetla_cvt<interm_t, fp16, block_size_x>(src_reg.xetla_select<block_size_x, 1>(idx)) * s_vec);
+            }
+        }
+    }
+}
+
 } // namespace gpu::xetla::subgroup
