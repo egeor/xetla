@@ -17,6 +17,9 @@
 // GEMV variants compilation unit 1 - WG_N[0..3] with all SG_K values
 #include "variant_common.hpp"
 
+#ifdef MINIMAL_BUILD
+void build_gemv_variants_1(std::vector<Variant>&) {}
+#else
 void build_gemv_variants_1(std::vector<Variant>& v) {
     constexpr uint32_t wg_m = PRE_GEMV_WG_M;
     constexpr uint32_t sg_m = PRE_GEMV_SG_M;
@@ -61,3 +64,4 @@ void build_gemv_variants_1(std::vector<Variant>& v) {
         v.push_back(Variant{wg_m, sg_m, wg_n, sg_n, PRE_GEMV_SG_K[3], PRECOMP_GKS, true, run_wrapper<PRECOMP_GKS, wg_m, sg_m, wg_n, sg_n, PRE_GEMV_SG_K[3], sg_m, int32_t, bf16>()});
     }
 }
+#endif // MINIMAL_BUILD

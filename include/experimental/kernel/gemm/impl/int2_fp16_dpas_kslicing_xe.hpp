@@ -531,8 +531,19 @@ public:
             uint32_t scale_a_size_y = args.scale_gs;
             mem_desc_scale_a.init(args.scale_a_base, {scale_a_size_x, scale_a_size_y, args.scale_a_ld}, {static_cast<int>(start_m), static_cast<int>(start_k / (args.matrix_k / args.scale_gs))});
         } else {
-            // Internal scale A: compute in SLM redundantly
-            compute_scale_a_to_slm<2>(g, args.matA_base, start_m, boundary_m, 0, args.matrix_k, args.matA_ld, scale_a_slm_base, scale_a_nbarr, args.scale_gs);
+            // Internal scale A: compute in SLM redundantly.
+            // Choose the largest unroll_factor whose tile (k_stride * unroll_factor)
+            // still fits inside one scale group (group_k = matrix_k / scale_gs).
+            // tile_width must satisfy: tile_width <= group_k, i.e.
+            //   k_stride * unroll_factor <= matrix_k / scale_gs
+            //   <=> unroll_factor <= matrix_k / (k_stride * scale_gs)
+            // Without this dispatch, large scale_gs makes tiles_per_row underflow to 0
+            // and the per-row absmax is never updated, producing huge bogus scales.
+            if (args.matrix_k >= 2u * k_stride * args.scale_gs) {
+                compute_scale_a_to_slm<2>(g, args.matA_base, start_m, boundary_m, 0, args.matrix_k, args.matA_ld, scale_a_slm_base, scale_a_nbarr, args.scale_gs);
+            } else {
+                compute_scale_a_to_slm<1>(g, args.matA_base, start_m, boundary_m, 0, args.matrix_k, args.matA_ld, scale_a_slm_base, scale_a_nbarr, args.scale_gs);
+            }
             
             // Create SLM memory descriptor - 2D tensor [rows, scale_gs]
             uint32_t scale_a_rows = boundary_m - start_m;

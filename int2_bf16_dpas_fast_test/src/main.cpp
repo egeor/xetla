@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <omp.h>
 #include <random>
@@ -152,13 +153,19 @@ int gemm_result_validate(data_type_a *A, data_type_b *B, data_type_c *C, uint32_
     float *gold_f = static_cast<float *>(malloc_host(m * n * sizeof(float), context));
     int8_t *quant_A = static_cast<int8_t *>(malloc_host(m * k * sizeof(int8_t), context));
 
-    // Let's quantize A using the scaleA tensor
+    // Let's quantize A using the scaleA tensor.
+    // Match the kernel: round-toward-zero (truncation) + saturating cast to int8.
+    // ESIMD saturate<int8_t>(float) uses RTZ, not RTE, so we MUST truncate.
     for (int i = 0; i < m; i++) {
         for (int gk = 0; gk < ks_groups; gk++) {
             for (int _ik = 0; _ik < (k / scale_gs); _ik++) {
                 int ik = gk * (k / scale_gs) + _ik;
                 float cur_scale_a = scaleA[gk * m + i];
-                quant_A[i * k + ik] = static_cast<int8_t>(static_cast<int32_t>(static_cast<float>(A[i * k + ik]) * cur_scale_a));
+                float prod_f = static_cast<float>(A[i * k + ik]) * cur_scale_a;
+                long q_l = static_cast<long>(prod_f); // truncate (RTZ)
+                if (q_l >  127) q_l =  127;
+                if (q_l < -128) q_l = -128;
+                quant_A[i * k + ik] = static_cast<int8_t>(q_l);
             }
         }
     }
@@ -213,7 +220,13 @@ int gemm_result_validate(data_type_a *A, data_type_b *B, data_type_c *C, uint32_
 
     buff_cmp::buff_vals<data_type_c, data_type_c> other(gold_C, m, n, n);
 
-    bool result = buff_cmp::xetla_buff_cmp(data, other, "int2 gemm validation");
+    // bf16 GEMM tolerances. Per-group int32 partial sums and per-group fp32
+    // scaling are exact; the noise comes from (a) the order in which the
+    // group-products are summed in fp32 and (b) the final fp32 -> bf16 cast.
+    // bf16 has 8 mantissa bits so 1 ULP at magnitude 4096 is 16 (vs 4 for fp16).
+    // Allow a few ULPs and a small absolute floor for near-zero cells.
+    bool result = buff_cmp::xetla_buff_cmp(data, other, "int2 gemm validation",
+            /*diff_elems_tol*/ 0.02, /*ulp_tol*/ 32, /*abs_tol*/ 16.0);
 
     std::cout << (!result ? "FAILED\n" : "PASSED\n");
 
@@ -409,7 +422,46 @@ void int2_dequantize_gemm_run(int iter, int n_sets, bool enable_validation) {
             B_packed_h[set][i] = B_h[set][i];
         }
 
-        // initialize ScaleA_h with the maximum of each row of A
+        // initialize ScaleA_h with the maximum of each row of A (per group)
+        for (int rowA = 0; rowA < matrix_m; rowA++) {
+            for (int igs = 0; igs < scale_gs; igs++) {
+                float absmax_row = FLT_EPSILON;
+                for (int _colA = 0; _colA < matrix_k / scale_gs; _colA++) {
+                    int colA = igs * (matrix_k / scale_gs) + _colA;
+                    absmax_row = std::max(absmax_row, std::abs(static_cast<float>(A_h[set][rowA * matrix_k + colA])));
+                }
+                ScaleA_h[set][igs * matrix_m + rowA] = 127.0f * frcp(absmax_row);
+            }
+        }
+
+        // Fake-quantize A so that A is bit-exactly representable as q/scale_a.
+        // Match the kernel's RTZ saturating cast (xetla_sat<int8_t,float> -> [-128,127]).
+        // This eliminates bf16 quantization noise: both the host gold and the
+        // kernel quantize to the same int8 values, so the only remaining
+        // numerical noise is the int32 -> fp32 -> bf16 reduction order.
+        for (int rowA = 0; rowA < matrix_m; rowA++) {
+            for (int igs = 0; igs < scale_gs; igs++) {
+                float scale_a = ScaleA_h[set][igs * matrix_m + rowA];
+                float inv_scale_a = frcp(scale_a);
+                for (int _colA = 0; _colA < matrix_k / scale_gs; _colA++) {
+                    int colA = igs * (matrix_k / scale_gs) + _colA;
+                    float v = static_cast<float>(A_h[set][rowA * matrix_k + colA]);
+                    long q_l = static_cast<long>(v * scale_a); // truncate (RTZ)
+                    if (q_l >  127) q_l =  127;
+                    if (q_l < -128) q_l = -128;
+                    int8_t q = static_cast<int8_t>(q_l);
+                    A_h[set][rowA * matrix_k + colA] = static_cast<bf16>(static_cast<float>(q) * inv_scale_a);
+                }
+            }
+        }
+
+        // After fake-quant, the per-group absmax of A may have shifted by one
+        // bf16 ULP. Recompute ScaleA_h from the *modified* A so that the host
+        // gold reference uses exactly the same scale that the kernel will
+        // recompute internally (when use_external_scale_a == false) and the
+        // same scale we ship through global memory (when use_external_scale_a
+        // == true). Without this, the kernel sees a slightly different scale
+        // from the host, producing systematic ~1% errors.
         for (int rowA = 0; rowA < matrix_m; rowA++) {
             for (int igs = 0; igs < scale_gs; igs++) {
                 float absmax_row = FLT_EPSILON;
@@ -553,14 +605,24 @@ void int2_dequantize_gemm_run(int iter, int n_sets, bool enable_validation) {
         // Create unique kernel type based on Test and post-op flags
         using kernel_name_t = gemm_kernel_wrapper<Test, EnableBias, EnableSiLU>;
         
-        // Define scale kernel types at function scope (only used if external scale A is enabled)
+        // Define scale kernel types at function scope (only used if external scale A is enabled).
+        // The 4th template parameter is just a uniqueness tag for SYCL kernel
+        // mangling; we make it match the actual runtime TILE_X to avoid
+        // accidental collisions when multiple TILE_X variants are launched.
+        using scale_kernel_320_t = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU, 320>; // TILE_X_160 (=2*160)
+        using scale_kernel_256_t = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU, 256>; // TILE_X     (=2*128)
         using scale_kernel_128_t = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU, 128>;
-        using scale_kernel_160_t = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU, 160>;
+        using scale_kernel_64_t  = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU,  64>;
+        using scale_kernel_32_t  = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU,  32>;
+        using scale_kernel_16_t  = compute_scale_kernel_wrapper<Test, EnableBias, EnableSiLU,  16>;
         
         // Conditionally include scale kernels only if external scale A is used
         std::vector<kernel_id> kernelId;
         if constexpr (use_external_scale_a) {
-            kernelId = {get_kernel_id<kernel_name_t>(), get_kernel_id<scale_kernel_128_t>(), get_kernel_id<scale_kernel_160_t>()};
+            kernelId = {get_kernel_id<kernel_name_t>(),
+                        get_kernel_id<scale_kernel_320_t>(), get_kernel_id<scale_kernel_256_t>(),
+                        get_kernel_id<scale_kernel_128_t>(), get_kernel_id<scale_kernel_64_t>(),
+                        get_kernel_id<scale_kernel_32_t>(),  get_kernel_id<scale_kernel_16_t>()};
         } else {
             // Only include GEMM kernel (scale computation is done internally in SLM)
             kernelId = {get_kernel_id<kernel_name_t>()};
@@ -606,8 +668,12 @@ void int2_dequantize_gemm_run(int iter, int n_sets, bool enable_validation) {
                     const size_t cols = matrix_k;
                     // tile width (power of two). Keep in sync with helper twidth.
                     // Use TILE_Y threads per work-group (one thread per row within the group)
-                    constexpr uint32_t TILE_X = 2*128;
-                    constexpr uint32_t TILE_X_160 = 2*160;
+                    constexpr uint32_t TILE_X     = 2*128; // 256
+                    constexpr uint32_t TILE_X_160 = 2*160; // 320
+                    constexpr uint32_t TILE_X_128 = 128;
+                    constexpr uint32_t TILE_X_64  = 64;
+                    constexpr uint32_t TILE_X_32  = 32;
+                    constexpr uint32_t TILE_X_16  = 16;
                     constexpr uint32_t TILE_Y = 32;
 
                     const size_t local_size = TILE_Y; // threads per group: theight
@@ -617,17 +683,39 @@ void int2_dequantize_gemm_run(int iter, int n_sets, bool enable_validation) {
                     auto A_dev = A_d[set];
                     auto Scale_dev = ScaleA_d[set];
 
-                    //std::cout << "[debug] launching compute_scale for set " << set << " (global_size=" << global_size << ", local_size=" << local_size << ")" << std::endl;
+                    // Per-group K range. The absmax_row_reduction kernel needs
+                    //   tile_width <= group_k   AND   group_k % tile_width == 0
+                    // so the inner loop reads exactly group_k values per group.
+                    // tiles_per_row = ((cols + tw - 1) / tw) / scale_gs underflows
+                    // to 0 if tile_width > group_k, leaving acc_vec at FLT_EPSILON
+                    // and producing bogus scales (~1e45). Pick the largest power
+                    // of two tile width <= group_k.
+                    const uint32_t group_k = static_cast<uint32_t>(cols) / scale_gs;
+
                     auto e_scale = queue.submit([&](handler &cgh) {
-                        if (cols % TILE_X_160 != 0) {
-                            // use TILE_X (128)
-                            cgh.parallel_for<scale_kernel_128_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                        if (group_k >= TILE_X && cols % TILE_X_160 == 0) {
+                            cgh.parallel_for<scale_kernel_320_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                                absmax_row_reduction<data_type_a, TILE_X_160, TILE_Y, TILE_X_160, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
+                            });
+                        } else if (group_k >= TILE_X) {
+                            cgh.parallel_for<scale_kernel_256_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
                                 absmax_row_reduction<data_type_a, TILE_X, TILE_Y, TILE_X, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
                             });
+                        } else if (group_k >= TILE_X_128) {
+                            cgh.parallel_for<scale_kernel_128_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                                absmax_row_reduction<data_type_a, TILE_X_128, TILE_Y, TILE_X_128, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
+                            });
+                        } else if (group_k >= TILE_X_64) {
+                            cgh.parallel_for<scale_kernel_64_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                                absmax_row_reduction<data_type_a, TILE_X_64, TILE_Y, TILE_X_64, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
+                            });
+                        } else if (group_k >= TILE_X_32) {
+                            cgh.parallel_for<scale_kernel_32_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                                absmax_row_reduction<data_type_a, TILE_X_32, TILE_Y, TILE_X_32, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
+                            });
                         } else {
-                            // use TILE_X_160 (160)
-                            cgh.parallel_for<scale_kernel_160_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
-                                absmax_row_reduction<data_type_a, TILE_X_160, TILE_Y, TILE_X_160, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
+                            cgh.parallel_for<scale_kernel_16_t>(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)), [=](sycl::nd_item<1> it) {
+                                absmax_row_reduction<data_type_a, TILE_X_16, TILE_Y, TILE_X_16, TILE_Y>::run(it, A_dev, static_cast<int>(cols), static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(scale_gs), Scale_dev);
                             });
                         }
                     });
@@ -1138,6 +1226,11 @@ static void print_precompile_plan() {
     template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>, false, false>(int, int, bool);
 #endif
 
+#ifdef MINIMAL_BUILD
+// MINIMAL BUILD: only the single requested variant is instantiated.
+// Requested config: --wg_m=1 --sg_m=1 --wg_n=128 --sg_n=16 --sg_k=128 --global_kslicing=1 (GEMV)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 16u, 128u, 1u, int32_t, bf16)
+#else
 // GEMM instantiations (6 total: 2 wg_m × 3 (wg_n, sg_n) pairs)
 //sg_k = 32
 INSTANTIATE_ALL_POSTOPS(1u, 16u, 8u, 256u, 128u, 32u, 8u, int32_t, bf16)
@@ -1304,3 +1397,4 @@ INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 80u, 16u, 32u, 1u, int32_t, bf16)
 INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 80u, 16u, 128u, 1u, int32_t, bf16)
 INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 80u, 16u, 160u, 1u, int32_t, bf16)
 INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 80u, 16u, 256u, 1u, int32_t, bf16)
+#endif // MINIMAL_BUILD

@@ -15,6 +15,14 @@ endif
 
 CXXFLAGS = -std=c++20 -O3 -fsycl -qopenmp -I../include -I../tests -I../tests/utils -I../tests/integration/gemm -I../tests/3rd_parties/googletest/googletest/include
 LDFLAGS = -lmkl_rt -lpthread -qopenmp
+
+# Optional minimal build: only compile a single GEMV variant
+# (wg_m=1, sg_m=1, wg_n=128, sg_n=16, sg_k=128, gks=1) to slash compile time.
+# Usage: make MINIMAL=1
+ifeq ($(MINIMAL),1)
+    CXXFLAGS += -DMINIMAL_BUILD
+    $(info ⚡ MINIMAL_BUILD enabled - only single GEMV variant will be compiled)
+endif
 SRCDIR = src
 BUILDDIR = build
 TARGET = $(BUILDDIR)/int2_fast_test

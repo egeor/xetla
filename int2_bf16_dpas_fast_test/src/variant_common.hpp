@@ -154,6 +154,20 @@ std::function<void()> run_wrapper() {
 // Precompiled variant configuration constants (constexpr for template instantiation)
 constexpr uint32_t PRECOMP_GKS = 1u;
 
+#ifdef MINIMAL_BUILD
+// MINIMAL BUILD: only the single requested variant is precompiled.
+// Requested config: --wg_m=1 --sg_m=1 --wg_n=128 --sg_n=16 --sg_k=128 --global_kslicing=1 (GEMV)
+// All GEMM variants are stubbed out to reduce compile time.
+constexpr std::array<uint32_t, 0> PRE_GEMM_WG_M = {};
+constexpr std::array<std::pair<uint32_t, uint32_t>, 0> PRE_GEMM_WG_N_PAIRS = {};
+constexpr std::array<uint32_t, 0> PRE_GEMM_SG_K = {};
+
+// GEMV: only the requested (wg_n=128, sg_n=16) and sg_k=128
+constexpr std::array<std::pair<uint32_t, uint32_t>, 1> PRE_GEMV_WG_N_PAIRS = {
+    std::pair<uint32_t, uint32_t> {128u, 16u}
+};
+constexpr std::array<uint32_t, 1> PRE_GEMV_SG_K = {128u};
+#else
 // Only precompiled variants from experimental configurations
 // GEMM: wg_m ∈ {64, 128}, sg_m=8, sg_k=32
 // wg_n/sg_n: (256,128), (128,128), (160,160)
@@ -184,6 +198,7 @@ constexpr std::array<std::pair<uint32_t, uint32_t>, 13> PRE_GEMV_WG_N_PAIRS = {
     std::pair<uint32_t, uint32_t> {128u, 16u}
 };
 constexpr std::array<uint32_t, 4> PRE_GEMV_SG_K = {32u, 128u, 160u, 256u};
+#endif // MINIMAL_BUILD
 
 constexpr uint32_t PRE_GEMM_SG_M = 8u;
 constexpr uint32_t PRE_GEMV_WG_M = 1u;

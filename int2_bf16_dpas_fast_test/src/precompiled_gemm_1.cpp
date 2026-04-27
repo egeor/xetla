@@ -17,6 +17,9 @@
 // GEMM variants compilation unit 1
 #include "variant_common.hpp"
 
+#ifdef MINIMAL_BUILD
+void build_gemm_variants_1(std::vector<Variant>&) {}
+#else
 void build_gemm_variants_1(std::vector<Variant>& v) {
     // WG_M[0], WG_N[0..1], SG_K[0..4]
     constexpr uint32_t wg_m = PRE_GEMM_WG_M[0];
@@ -102,3 +105,4 @@ void build_gemm_variants_1(std::vector<Variant>& v) {
         v.push_back(Variant{wg_m, sg_m, wg_n, sg_n, sg_k, PRECOMP_GKS, false, run_wrapper<PRECOMP_GKS, wg_m, sg_m, wg_n, sg_n, sg_k, sg_m, int32_t, bf16>()});
     }
 }
+#endif // MINIMAL_BUILD
