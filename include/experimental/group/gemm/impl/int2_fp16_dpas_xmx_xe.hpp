@@ -509,6 +509,11 @@ public:
         auto k_chunk_global = k_total_iters / args.scale_gs;
         auto k_groups = (k_iters + k_chunk_global - 1) / k_chunk_global;
         auto k_chunks = k_iters / k_groups;
+        // Guard against unsigned underflow: if k_chunks <= stages we skip the
+        // pipelined-prefetch inner loop entirely and run all k_chunks iterations
+        // in the tail loop below.
+        const int k_chunks_signed = static_cast<int>(k_chunks);
+        const int k_chunks_minus_stages = (k_chunks_signed > stages) ? (k_chunks_signed - stages) : 0;
 
         matAcc_local_f32.init(0);
         for (int igk = 0; igk < k_groups; igk++) {
@@ -523,7 +528,7 @@ public:
                 scaleA_prefetch_payload.template update_tdesc<tdesc_update_dir::y_dir>(1);
             }
 
-            for (int j = 0; j < k_chunks - stages; j++) {
+            for (int j = 0; j < k_chunks_minus_stages; j++) {
                 int i = igk * k_chunks + j;
                 if constexpr (enable_periodic_sync) {
                     if ((i % sync_freq) == 0) {
@@ -562,8 +567,8 @@ public:
                 }
             }
 
-            for (int j = k_chunks - stages; j < k_chunks; j++) {
-                int i = igk * k_chunks + j;
+            for (int j = k_chunks_minus_stages; j < k_chunks_signed; j++) {
+                int i = igk * k_chunks_signed + j;
                 if constexpr (enable_periodic_sync) {
                     if ((i % sync_freq) == 0) {
                         if constexpr (wg_size_x > 1) { nbarrier_a.arrive(); }
