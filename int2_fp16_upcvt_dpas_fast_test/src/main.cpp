@@ -82,7 +82,7 @@ struct RunConfig {
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
-template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS>
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS, int LS = 1>
 class int2_fp16_upcvt_kernel;
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ static bool compare_against_gold(const DTypeC *C, const DTypeC *gold_C,
 // ---------------------------------------------------------------------------
 // Run one GEMM with compile-time tile sizes.
 
-template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1>
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1, int LS = 1>
 void run_gemm_impl(const RunConfig &cfg) {
     using data_type_a   = fp16;
     using data_type_b   = int2x16;
@@ -175,7 +175,7 @@ void run_gemm_impl(const RunConfig &cfg) {
     constexpr uint32_t prefetch_distance       = 0;
     constexpr uint32_t periodic_sync_interval  = 0;
     constexpr uint32_t global_kslicing         = KS;
-    constexpr uint32_t local_kslicing          = 1;
+    constexpr uint32_t local_kslicing          = LS;
 
     const int M  = cfg.matrix_m;
     const int N  = cfg.matrix_n;
@@ -410,7 +410,7 @@ void run_gemm_impl(const RunConfig &cfg) {
     profiling_helper prof("int2_fp16_upcvt_gemm",
             2.0 * static_cast<double>(M) * N * K, "gflops");
 
-    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK, KS>;
+    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK, KS, LS>;
 
     double host_total_ms = 0.0;
     double device_total_ns = 0.0;
@@ -583,9 +583,12 @@ void run_gemm(const RunConfig &cfg) {
     const int ks = (cfg.matrix_m == 1) ? ks_for_n(cfg.matrix_n) : 1;
 
     if (gemv_small_n) {
-        // wg_n=32 path; only KS=4 needed for N<=4096.
+        // wg_n=32 GEMV path. Cooperative K-slicing across 4 SGs/WG via SLM
+        // reduce (LS=4), plus 2 global K-slices (KS=2). Total 8 SGs do K
+        // for each WG-N tile, halving global launches vs KS=4/LS=1 and
+        // hiding more launch+memory latency at small N.
         run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
-                /*SGK*/128, /*KS*/4>(cfg);
+                /*SGK*/128, /*KS*/2, /*LS*/4>(cfg);
         return;
     }
 
