@@ -606,6 +606,23 @@ void run_gemm(const RunConfig &cfg) {
         return;
     }
 
+    // Upper-mid-N GEMV (8192 < N <= 16384). wg_n=64 with KS=1 and LS=2.
+    // The wider wg_n=128 here gives strong perf only at multiples of 128
+    // that align with one-wave dispatch (N in {12288, 16384}); at the
+    // off-alignment N values (10240, 13312, 14336) the spatial WG count
+    // straddles a wave boundary and perf drops to ~260 GiB/s. wg_n=64
+    // keeps WG count high enough to fully fill multiple waves uniformly,
+    // smoothing the curve to 295-324 GiB/s across the full range
+    // (vs 234-324 with wg_n=128). Keeping LS=2 (instead of mid-N's LS=4)
+    // is +30-40 GiB/s here -- larger N tolerates less SLM K-reduce.
+    const bool gemv_upper_mid_n
+            = (cfg.matrix_m == 1) && (cfg.matrix_n > 8192) && (cfg.matrix_n <= 16384);
+    if (gemv_upper_mid_n) {
+        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
+        return;
+    }
+
     constexpr int kWGN = 128;
     switch (ks) {
         case 4:
@@ -613,13 +630,8 @@ void run_gemm(const RunConfig &cfg) {
                     /*SGK*/128, /*KS*/4>(cfg);
             break;
         case 2:
-            // 8192 < N <= 16384. KS=1 with 2-way SLM K-reduce (LS=2)
-            // beats KS=2 here: avoids the global atomic-reduce pass and
-            // halves per-WG B-tile residency vs LS=4. +7-8% at
-            // N in {12288, 16384}, fixing the non-monotonic perf cliff
-            // where N=12288 was slower than N=6144.
             run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
-                    /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
+                    /*SGK*/128, /*KS*/2>(cfg);
             break;
         default:
             run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
