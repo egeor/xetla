@@ -564,15 +564,17 @@ void run_gemm_impl(const RunConfig &cfg) {
 //   global_kslicing (KS) provides extra logical groups via K-reduction
 //     when spatial WG count is below the device wave width.
 // Empirical M=1, K=4096 perf:
-//   N=4096  : 245 GB/s (wg_n=32, KS=4)
-//   N=8192  : 285 GB/s (wg_n=128, KS=4)
+//   N=4096  : 290 GB/s (wg_n=32,  KS=2, LS=4)
+//   N=6144  : 319 GB/s (wg_n=64,  KS=1, LS=4)
+//   N=8192  : 332 GB/s (wg_n=64,  KS=1, LS=4)
 //   N=16384 : 322 GB/s (wg_n=128, KS=2)
 //   N=32768 : 362 GB/s (wg_n=128, KS=1)
 void run_gemm(const RunConfig &cfg) {
-    // For M=1 with very small N, switch to a narrower WG to multiply
-    // spatial parallelism. For all other M=1 N values and for M>1, the
-    // wider wg_n=128 is a small but consistent win.
-    const bool gemv_small_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
+    // For M=1, dispatch to one of three GEMV-tuned tiers based on N. For
+    // M>1 the wider wg_n=128 is a small but consistent win.
+    const bool gemv_tiny_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
+    const bool gemv_mid_n  = (cfg.matrix_m == 1) && (cfg.matrix_n > 4096)
+            && (cfg.matrix_n <= 8192);
 
     auto ks_for_n = [](int n) -> int {
         if (n <= 4096)  return 4;
@@ -582,13 +584,25 @@ void run_gemm(const RunConfig &cfg) {
     };
     const int ks = (cfg.matrix_m == 1) ? ks_for_n(cfg.matrix_n) : 1;
 
-    if (gemv_small_n) {
+    if (gemv_tiny_n) {
         // wg_n=32 GEMV path. Cooperative K-slicing across 4 SGs/WG via SLM
         // reduce (LS=4), plus 2 global K-slices (KS=2). Total 8 SGs do K
         // for each WG-N tile, halving global launches vs KS=4/LS=1 and
         // hiding more launch+memory latency at small N.
         run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
                 /*SGK*/128, /*KS*/2, /*LS*/4>(cfg);
+        return;
+    }
+
+    if (gemv_mid_n) {
+        // Mid-N GEMV (4096 < N <= 8192). wg_n=64 with no global K-slice
+        // (KS=1) and 4-way SLM K-reduce (LS=4). Spatial WG count
+        // (N/64 in {96,128}) lands within one to two GPU waves and
+        // KS=1 avoids redundant atomic/reduction passes that hurt this
+        // regime. Beats wg_n=128/KS=4 (the prior path) by +16-19% at
+        // N in {6144, 8192}.
+        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
         return;
     }
 
