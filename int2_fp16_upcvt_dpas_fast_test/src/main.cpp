@@ -75,6 +75,10 @@ struct RunConfig {
     // cache. If num_sets == 0 it is auto-sized from min_footprint_gb.
     int    num_sets         = 0;
     double min_footprint_gb = 2.0;
+    // If true, each device buffer set gets independently randomized
+    // A/B/ScaleB inputs (and is validated against its own gold reference).
+    // Default false: one host init is broadcast to all sets.
+    bool distinct_sets = false;
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
@@ -278,28 +282,51 @@ void run_gemm_impl(const RunConfig &cfg) {
     auto ScaleB_h = static_cast<data_type_scale *>(
             malloc_host(size_scale_b * sizeof(data_type_scale), context));
 
-    // ----- Initialize host buffers once -----
+    // ----- Initialize host buffers (one shared init; possibly re-randomized
+    //       per set below if cfg.distinct_sets is set) -----
+    auto fill_host_inputs = [&](data_type_a *A, data_type_b *B,
+                                    data_type_scale *S) {
 #pragma omp parallel for
-    for (size_t i = 0; i < size_a; ++i) {
-        A_h[i] = static_cast<fp16>(random_float(-5.0f, 5.0f));
-    }
-
-    // B int2x16 codes restricted to {0, 1, 3}: same trick as in the existing
-    // int2_fp16_dpas_fast_test. Each uint32_t holds 16 codes for 16 K-rows
-    // (and one N-col, since the storage is K-packed).
+        for (size_t i = 0; i < size_a; ++i) {
+            A[i] = static_cast<fp16>(random_float(-5.0f, 5.0f));
+        }
+        // B int2x16 codes restricted to {0, 1, 3}: same trick as in the
+        // existing int2_fp16_dpas_fast_test. Each uint32_t holds 16 codes
+        // for 16 K-rows (and one N-col, since the storage is K-packed).
 #pragma omp parallel for
-    for (size_t i = 0; i < size_b_words; ++i) {
-        uint32_t r1 = random_uint32();
-        uint32_t r2 = random_uint32();
-        uint32_t low_bits  = r1 & 0x55555555u;            // bit 2k (l)
-        uint32_t high_bits = (r1 & r2) & 0x55555555u;     // bit 2k, l=1 only
-        uint32_t a = low_bits | (high_bits << 1);
-        B_h[i].data = a;
-    }
+        for (size_t i = 0; i < size_b_words; ++i) {
+            uint32_t r1 = random_uint32();
+            uint32_t r2 = random_uint32();
+            uint32_t low_bits = r1 & 0x55555555u;          // bit 2k (l)
+            uint32_t high_bits = (r1 & r2) & 0x55555555u;  // bit 2k, l=1 only
+            uint32_t a = low_bits | (high_bits << 1);
+            B[i].data = a;
+        }
+        for (size_t i = 0; i < size_scale_b; ++i) {
+            // Random scale in [0.75, 15.75]; positive to avoid extra sign
+            // noise.
+            S[i] = static_cast<fp16>(random_float(0.0f, 15.0f) + 0.75f);
+        }
+    };
 
-    for (size_t i = 0; i < size_scale_b; ++i) {
-        // Random scale in [0.75, 15.75]; positive to avoid extra sign noise.
-        ScaleB_h[i] = static_cast<fp16>(random_float(0.0f, 15.0f) + 0.75f);
+    fill_host_inputs(A_h, B_h, ScaleB_h);
+
+    // Per-set gold references. With distinct_sets each set gets its own
+    // gold; otherwise all sets share gold[0].
+    const int num_golds
+            = (cfg.validate && cfg.distinct_sets) ? num_sets : 1;
+    std::vector<data_type_c *> gold_C_set;
+    if (cfg.validate) {
+        gold_C_set.resize(num_golds);
+        for (int g = 0; g < num_golds; ++g) {
+            gold_C_set[g] = static_cast<data_type_c *>(malloc_host(
+                    size_c * sizeof(data_type_c), context));
+        }
+        // Gold for the shared init (also serves as gold[0] for distinct_sets,
+        // since we'll reuse the current host buffers for set 0 below).
+        compute_gold<data_type_c>(A_h,
+                reinterpret_cast<const uint32_t *>(B_h), ScaleB_h,
+                gold_C_set[0], M, K, N, gs);
     }
 
     // ----- Allocate `num_sets` distinct device buffer sets -----
@@ -328,8 +355,17 @@ void run_gemm_impl(const RunConfig &cfg) {
                       << " GB).\n";
             std::exit(1);
         }
-        // Same data into every set: identical results, but distinct addresses
-        // so each iteration walks new HBM lines (defeats L2/L3 reuse).
+        // For set s>0 with distinct_sets, re-randomize host buffers and
+        // recompute the matching gold reference. Set 0 always uses the
+        // initial host init.
+        if (cfg.distinct_sets && s > 0) {
+            fill_host_inputs(A_h, B_h, ScaleB_h);
+            if (cfg.validate) {
+                compute_gold<data_type_c>(A_h,
+                        reinterpret_cast<const uint32_t *>(B_h),
+                        ScaleB_h, gold_C_set[s], M, K, N, gs);
+            }
+        }
         queue.memcpy(A_d_set[s], A_h,
                 size_a * sizeof(data_type_a)).wait();
         queue.memcpy(B_d_set[s], B_h,
@@ -455,36 +491,29 @@ void run_gemm_impl(const RunConfig &cfg) {
                   << "\n";
     }
 
-    // ----- Validate (every set: same inputs were copied to all sets, so
-    //               every set's C must match the same gold reference) -----
+    // ----- Validate -----
+    // With distinct_sets, each set has its own gold reference; otherwise all
+    // sets share gold[0] (and a stable bytewise-equal check fast-paths
+    // sets >0).
     if (cfg.validate) {
-        data_type_c *gold_C = static_cast<data_type_c *>(malloc_host(
-                size_c * sizeof(data_type_c), context));
-        compute_gold<data_type_c>(A_h,
-                reinterpret_cast<const uint32_t *>(B_h), ScaleB_h, gold_C,
-                M, K, N, gs);
-
         int passed = 0;
         int failed = 0;
         for (int s = 0; s < num_sets; ++s) {
             queue.memcpy(C_h, C_d_set[s],
                     size_c * sizeof(data_type_c)).wait();
+            const data_type_c *gold_C
+                    = cfg.distinct_sets ? gold_C_set[s] : gold_C_set[0];
             std::string label = "int2 fp16 upcvt GEMM validation [set "
                     + std::to_string(s) + "/" + std::to_string(num_sets)
                     + "]";
-            // For large num_sets, suppress the per-set verbose dump unless
-            // there is a failure.
             const bool verbose = (num_sets <= 4) || (s == 0);
             bool ok;
-            if (verbose) {
+            if (verbose || cfg.distinct_sets) {
                 ok = compare_against_gold<data_type_c>(C_h, gold_C, M, N,
                         label);
             } else {
-                // Cheap byte-equal check first (every set should be identical
-                // across iterations as well, since rotation is round-robin
-                // and each set was written by the same kernel an equal
-                // number of times). Fall back to the full tolerance check
-                // on mismatch.
+                // Shared-init fast path: every set's C should match gold[0]
+                // bytewise. Fall back to tolerance check on mismatch.
                 bool bytewise_eq = (std::memcmp(C_h, gold_C,
                                             size_c * sizeof(data_type_c))
                         == 0);
@@ -504,7 +533,7 @@ void run_gemm_impl(const RunConfig &cfg) {
                   << " sets PASSED";
         if (failed) std::cout << ", " << failed << " FAILED";
         std::cout << "\n";
-        free(gold_C, context);
+        for (auto *g : gold_C_set) free(g, context);
     }
 
     // ----- Free -----
@@ -583,6 +612,7 @@ int main(int argc, char **argv) {
         else if (a == "--k" && i + 1 < argc) parse_int("--k", argv[++i], cfg.matrix_k);
         else if (a == "--iters" && i + 1 < argc) parse_int("--iters", argv[++i], cfg.iters);
         else if (a == "--no-validate") cfg.validate = false;
+        else if (a == "--distinct-sets") cfg.distinct_sets = true;
         else if (a == "--sets" && i + 1 < argc)
             parse_int("--sets", argv[++i], cfg.num_sets);
         else if (a == "--min-footprint-gb" && i + 1 < argc) {
@@ -592,8 +622,10 @@ int main(int argc, char **argv) {
         else if (a == "-h" || a == "--help") {
             std::cout << "Usage: " << argv[0]
                       << " [--m M] [--n N] [--k K] [--iters N]"
-                      << " [--no-validate]"
+                      << " [--no-validate] [--distinct-sets]"
                       << " [--sets N | --min-footprint-gb F]\n"
+                      << "  --distinct-sets      : re-randomize A/B/ScaleB per"
+                      << " set (each set validated against its own gold)\n"
                       << "  --sets N             : allocate N distinct device-side"
                       << " buffer sets and rotate over them\n"
                       << "  --min-footprint-gb F : auto-pick N so total footprint"
