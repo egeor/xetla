@@ -551,32 +551,46 @@ void run_gemm_impl(const RunConfig &cfg) {
     free(Cnt_d, context);
 }
 
-// Run with the default tile config: wg_m=1, sg_m=1, wg_n=128, sg_n=16, sg_k=128.
+// Run with the default tile config: wg_m=1, sg_m=1, sg_n=16, sg_k=128.
 // (mma_xmx_m == sg_m == 1 makes XMX accept tile_size_m == 1.)
 //
-// global_kslicing (KS) is selected adaptively from N to maintain wave
-// occupancy on Xe2 (~64 Xe-cores). With wg_n=128 the spatial WG count is
-// N/128; we target ~256 WGs (~4 waves) by setting KS = ceil(256 / (N/128))
-// = ceil(32768 / N), clamped to {1,2,4,8}. Empirically this lifts M=1,
-// K=4096 perf at N=8192 from 170 -> 251 GB/s (ks=4) without hurting
-// N=32768 (ks=1).
+// Tile shape and KS are tuned via sweep on M=1 GEMV (Xe2, ~64 Xe-cores):
+//   sg_n=16 is mandatory (HW caps block_size_x_b=16).
+//   sg_k=128 is noise-equivalent to 64/256.
+//   wg_n is selected adaptively from N: wg_n=32 reduces per-WG B
+//     footprint and quadruples spatial parallelism, which wins at very
+//     small N (N<=4096); but at larger N the increased WG-launch and
+//     scheduling overhead outweighs that benefit, so we keep wg_n=128.
+//   global_kslicing (KS) provides extra logical groups via K-reduction
+//     when spatial WG count is below the device wave width.
+// Empirical M=1, K=4096 perf:
+//   N=4096  : 245 GB/s (wg_n=32, KS=4)
+//   N=8192  : 285 GB/s (wg_n=128, KS=4)
+//   N=16384 : 322 GB/s (wg_n=128, KS=2)
+//   N=32768 : 362 GB/s (wg_n=128, KS=1)
 void run_gemm(const RunConfig &cfg) {
-    constexpr int kWGN = 128;
+    // For M=1 with very small N, switch to a narrower WG to multiply
+    // spatial parallelism. For all other M=1 N values and for M>1, the
+    // wider wg_n=128 is a small but consistent win.
+    const bool gemv_small_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
+
     auto ks_for_n = [](int n) -> int {
-        // ~256 target WGs / (n / wg_n=128) = 32768/n, rounded up to a power
-        // of two in {1,2,4,8}. Only used for the M=1 GEMV-style cases; for
-        // M>1 the spatial M dimension already provides occupancy.
-        if (n <= 4096)  return 8;
+        if (n <= 4096)  return 4;
         if (n <= 8192)  return 4;
         if (n <= 16384) return 2;
         return 1;
     };
     const int ks = (cfg.matrix_m == 1) ? ks_for_n(cfg.matrix_n) : 1;
+
+    if (gemv_small_n) {
+        // wg_n=32 path; only KS=4 needed for N<=4096.
+        run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
+                /*SGK*/128, /*KS*/4>(cfg);
+        return;
+    }
+
+    constexpr int kWGN = 128;
     switch (ks) {
-        case 8:
-            run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
-                    /*SGK*/128, /*KS*/8>(cfg);
-            break;
         case 4:
             run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
                     /*SGK*/128, /*KS*/4>(cfg);
