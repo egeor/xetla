@@ -62,6 +62,22 @@ struct dispatch_policy_int2_fp16_dpas_kslicing {
     static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
 };
 
+/// @brief int2 weight-only-quant kslicing GEMM, fp16 activations + fp16 scale per K-group.
+/// Activations are kept in fp16 and fed directly to XMX (no A quantization);
+/// int2 weights are upconverted to fp16 by applying the per-K-group fp16 scale.
+/// No zero-points (int2 codes are interpreted as signed two's complement: 0/+1/-2/-1).
+/// Layout for ScaleB: row-major [matrix_k / dequant_s, matrix_n].
+/// @tparam num_global_kslicing_ Is the k dim split ratio between groups.
+/// @tparam num_local_kslicing_  Is the k dim split ratio within a group.
+template <typename group_swizzle_policy_, int num_global_kslicing_ = 1,
+        int num_local_kslicing_ = 1>
+struct dispatch_policy_int2_fp16_upcvt_kslicing {
+    using group_swizzle_policy = group_swizzle_policy_;
+    static constexpr int num_global_kslicing = num_global_kslicing_;
+    static constexpr int num_local_kslicing = num_local_kslicing_;
+    static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
+};
+
 /// @} xetla_gemm
 
 } // namespace gpu::xetla::kernel
