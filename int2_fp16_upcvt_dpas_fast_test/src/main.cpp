@@ -613,8 +613,13 @@ void run_gemm(const RunConfig &cfg) {
                     /*SGK*/128, /*KS*/4>(cfg);
             break;
         case 2:
+            // 8192 < N <= 16384. KS=1 with 2-way SLM K-reduce (LS=2)
+            // beats KS=2 here: avoids the global atomic-reduce pass and
+            // halves per-WG B-tile residency vs LS=4. +7-8% at
+            // N in {12288, 16384}, fixing the non-monotonic perf cliff
+            // where N=12288 was slower than N=6144.
             run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
-                    /*SGK*/128, /*KS*/2>(cfg);
+                    /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
             break;
         default:
             run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
