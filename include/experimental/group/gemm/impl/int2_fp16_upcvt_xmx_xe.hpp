@@ -407,119 +407,121 @@ public:
     }
 
 private:
-    /// Unpack the int2x16-packed matB tile into an fp16 VNNI-tiled tile,
-    /// scaled element-wise by the per-K-group scale (one fp16 per N-column).
+    /// Unpack the int2x16-packed matB tile into an fp16 VNNI-2-laid tile, with
+    /// the per-K-group fp16 scale already applied. Single pass, no scratch.
     ///
-    /// Memory layout of matB (in registers after load):
-    ///   block has block_size_x_b columns x (block_size_y_b/pack_ratio) "packed
-    ///   rows" of int2x16. Each int2x16 word = 16 contiguous K-rows for one
-    ///   N-column.
+    /// Codes are restricted by the driver to {0b00, 0b01, 0b11}, i.e. values
+    /// {0, +1, -1}. Each weight's contribution is therefore drawn from the
+    /// 3-element set {0, +scale, -scale}, so there is *no* fp16 multiply at
+    /// all in the inner loop: we precompute `+scale_vec` and `neg_scale_vec`
+    /// (one fp16 XOR with 0x8000 -- just sign flip) and select by code bits.
     ///
-    /// Bit-blend trick: for a 2-bit code (b1 b0):
-    ///   00 -> 0    -> fp16 bits 0x0000
-    ///   01 -> +1   -> fp16 bits 0x3C00
-    ///   11 -> -1   -> fp16 bits 0xBC00
-    ///   10 -> -2   -> fp16 bits 0x8000 (= -0; treated as 0 below). The driver
-    ///        for this variant guarantees codes are restricted to {0, 1, 3}.
-    /// Construction: fp16_bits = (b0 ? 0x3C00 : 0) | (b1 ? 0x8000 : 0).
+    /// Per-lane logic (b1 = sign bit, b0 = magnitude bit):
+    ///   mag_mask  = 0 - b0       // 0x0000 or 0xFFFF
+    ///   sign_xor  = (0 - b1) & 0x8000
+    ///   out_bits  = (scale_bits ^ sign_xor) & mag_mask
+    /// All operations are uint16, no fp ops, fully branchless.
+    ///
+    /// Output layout: `matB_acc` is in `reg_layout::vnni_tiled`. Within each
+    /// block, a K-pair `(k, k+1)` for column `col` lives at
+    ///   dst_blk[(k/2)*2*BSX + col*2 + (k%2)]
+    /// We emit directly there with a stride-2 select, fusing what used to be
+    /// a row-major scratch + VNNI shuffle pass.
     inline void dequantize(
             matB_acc_t &matB_acc, matB_t &matB, scale_t &scale) {
         constexpr uint32_t num_block_x = tile_size_x_b / block_size_x_b;
         constexpr uint32_t num_block_y
                 = (tile_size_y_b / pack_ratio) / (block_size_y_b / pack_ratio);
-        constexpr uint32_t vnni_rows = sizeof(uint32_t) / sizeof(dtype_mma_b);
         constexpr uint32_t block_b_y_per_scale = dequant_s / block_size_y_b;
         constexpr uint32_t pack_count = block_size_y_b / pack_ratio;
         constexpr uint32_t BSX = block_size_x_b;
         constexpr uint32_t BSY = block_size_y_b;
         static_assert(pack_count * pack_ratio == BSY,
                 "block_size_y_b must be divisible by pack_ratio");
+        static_assert((BSY % 2) == 0,
+                "block_size_y_b must be even for VNNI-2 layout");
 #pragma unroll
         for (uint32_t i = 0; i < num_block_y; ++i) {
 #pragma unroll
             for (uint32_t j = 0; j < num_block_x; ++j) {
                 int block_id = (i * num_block_x + j);
-                // matB block: pack_count packed-rows x BSX cols of int2x16
-                // (laid out row-major as packed_row * BSX + col).
+
+                // matB block: pack_count packed-rows x BSX cols of int2x16.
                 auto matB_blk_u32
                         = matB.reg
                                   .xetla_select<matB_t::block_elems, 1>(
                                           block_id * matB_t::block_elems)
                                   .xetla_format<uint32_t>();
 
+                // Scale: one fp16 per N-column (BSX-wide), shared across
+                // block_b_y_per_scale Y-blocks.
                 int scale_block_id
                         = (i / block_b_y_per_scale * num_block_x + j);
                 auto scale_vec
                         = scale.reg.xetla_select<scale_t::block_size_x, 1>(
                                 scale_block_id * scale_t::block_size_x);
 
+                // Bitwise view of scale, BSX uint16-lanes, and its negation.
+                xetla_vector<uint16_t, BSX> scale_u16
+                        = scale_vec.xetla_format<uint16_t>();
+                xetla_vector<uint16_t, BSX> neg_scale_u16
+                        = scale_u16 ^ uint16_t(0x8000u); // sign-flip
+
+                // Destination view: BSX*BSY fp16 in VNNI-2 layout, viewed as
+                // uint16 so we can write the bit-pattern result directly.
                 auto dst_blk
                         = matB_acc.reg.xetla_select<matB_acc_t::block_elems, 1>(
                                 block_id * matB_acc_t::block_elems);
+                auto dst_blk_u16 = dst_blk.xetla_format<uint16_t>();
 
-                // Step 1: Vectorized unpack to row-major fp16 plane
-                //   cvt_blk_u16[row * BSX + col]
-                // for row in [0, BSY), col in [0, BSX).
-                xetla_vector<uint16_t, BSX * BSY> cvt_blk_u16;
+                // Single fused pass: walk packed rows, and for each of the
+                // 16 codes per word, emit BSX fp16 lanes into VNNI position.
 #pragma unroll
                 for (uint32_t rp = 0; rp < pack_count; ++rp) {
                     auto src_words
                             = matB_blk_u32.xetla_select<BSX, 1>(rp * BSX);
 #pragma unroll
                     for (uint32_t c = 0; c < pack_ratio; ++c) {
-                        // For each of BSX cols: extract 2-bit code at position c.
-                        xetla_vector<uint32_t, BSX> shifted
+                        // Extract 2-bit code at K-position c of this packed
+                        // row, narrow to uint16.
+                        xetla_vector<uint32_t, BSX> shifted_u32
                                 = (src_words >> (2 * c)) & 0x3u;
-                        // mag bits: (b0 ? 0x3C00 : 0)
-                        xetla_vector<uint32_t, BSX> mag
-                                = (shifted & 0x1u) * uint32_t(0x3C00u);
-                        // sign bit: (b1 ? 0x8000 : 0). (shifted & 2) is 0 or 2;
-                        // multiply by 0x4000 to get 0 or 0x8000.
-                        xetla_vector<uint32_t, BSX> sgn
-                                = (shifted & 0x2u) * uint32_t(0x4000u);
-                        xetla_vector<uint32_t, BSX> bits32 = mag | sgn;
-                        // Narrow uint32 -> uint16 (low half).
-                        xetla_vector<uint16_t, BSX> bits16
-                                = bits32.xetla_format<uint16_t>()
+                        xetla_vector<uint16_t, BSX> code_u16
+                                = shifted_u32.xetla_format<uint16_t>()
                                           .xetla_select<BSX, 2>(0);
-                        uint32_t row_in_blk = rp * pack_ratio + c;
-                        cvt_blk_u16.xetla_select<BSX, 1>(row_in_blk * BSX)
-                                = bits16;
+
+                        // Branchless masks from the 2 code bits.
+                        //   b0 (= LSB) -> magnitude flag (0/1)
+                        //   b1         -> sign flag      (0/1)
+                        //   0 - bit yields 0x0000 or 0xFFFF (lane mask).
+                        xetla_vector<uint16_t, BSX> mag_mask
+                                = uint16_t(0)
+                                - (code_u16 & uint16_t(1));
+                        xetla_vector<uint16_t, BSX> sign_mask
+                                = uint16_t(0)
+                                - ((code_u16 >> 1) & uint16_t(1));
+
+                        // Pick +scale or -scale by sign, then zero out by mag.
+                        // Equivalent to: result = (b0 ? (b1 ? -scale : +scale) : 0).
+                        xetla_vector<uint16_t, BSX> signed_scale
+                                = (sign_mask & neg_scale_u16)
+                                | (~sign_mask & scale_u16);
+                        xetla_vector<uint16_t, BSX> result
+                                = signed_scale & mag_mask;
+
+                        // Emit at VNNI-2 position. Row inside the block is
+                        // `rp*pack_ratio + c`; that lives at offset
+                        //   k_pair*2*BSX + row_in_pair  (stride 2, length BSX)
+                        // within dst_blk_u16.
+                        constexpr uint32_t /*intentional const for unroll*/
+                                _unused = 0; (void)_unused;
+                        const uint32_t row        = rp * pack_ratio + c;
+                        const uint32_t k_pair     = row >> 1;
+                        const uint32_t row_in_pair = row & 1u;
+                        dst_blk_u16.xetla_select<BSX, 2>(
+                                k_pair * 2u * BSX + row_in_pair)
+                                = result;
                     }
-                }
-                auto cvt_blk_f16 = cvt_blk_u16.xetla_format<dtype_mma_b>();
-
-                // Step 2: VNNI-2 layout (interleave pairs of K-rows) and
-                // multiply by the per-N-column scale.
-                xetla_vector<dtype_mma_b,
-                        matB_acc_t::block_elems * vnni_rows>
-                        temp_blk;
-                temp_blk.xetla_select<matB_acc_t::block_elems, vnni_rows>(0)
-                        = cvt_blk_f16;
-
-#pragma unroll
-                for (uint32_t k = 0; k < BSY; k += vnni_rows) {
-#pragma unroll
-                    for (uint32_t row = 0; row < vnni_rows; row++) {
-                        temp_blk.xetla_select<BSX, vnni_rows>(
-                                row + BSX * k * vnni_rows)
-                                = temp_blk.xetla_select<BSX, vnni_rows>(
-                                        (k + row) * BSX * vnni_rows);
-                    }
-                }
-
-                xetla_vector<dtype_scale, BSX * vnni_rows> scale_blk;
-#pragma unroll
-                for (uint32_t row = 0; row < vnni_rows; row++) {
-                    scale_blk.xetla_select<BSX, vnni_rows>(row) = scale_vec;
-                }
-
-#pragma unroll
-                for (uint32_t k = 0; k < BSY; k += vnni_rows) {
-                    dst_blk.xetla_select<BSX * vnni_rows, 1>(k * BSX)
-                            = temp_blk.xetla_select<BSX * vnni_rows, 1>(
-                                      k * BSX * vnni_rows)
-                            * scale_blk;
                 }
             }
         }
