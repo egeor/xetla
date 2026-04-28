@@ -78,7 +78,7 @@ struct RunConfig {
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
-template <int WGM, int WGN, int SGM, int SGN, int SGK>
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS>
 class int2_fp16_upcvt_kernel;
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ static bool compare_against_gold(const DTypeC *C, const DTypeC *gold_C,
 // ---------------------------------------------------------------------------
 // Run one GEMM with compile-time tile sizes.
 
-template <int WGM, int WGN, int SGM, int SGN, int SGK>
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1>
 void run_gemm_impl(const RunConfig &cfg) {
     using data_type_a   = fp16;
     using data_type_b   = int2x16;
@@ -170,7 +170,7 @@ void run_gemm_impl(const RunConfig &cfg) {
     constexpr int sg_tile_k = SGK;
     constexpr uint32_t prefetch_distance       = 0;
     constexpr uint32_t periodic_sync_interval  = 0;
-    constexpr uint32_t global_kslicing         = 1;
+    constexpr uint32_t global_kslicing         = KS;
     constexpr uint32_t local_kslicing          = 1;
 
     const int M  = cfg.matrix_m;
@@ -374,7 +374,7 @@ void run_gemm_impl(const RunConfig &cfg) {
     profiling_helper prof("int2_fp16_upcvt_gemm",
             2.0 * static_cast<double>(M) * N * K, "gflops");
 
-    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK>;
+    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK, KS>;
 
     double host_total_ms = 0.0;
     double device_total_ns = 0.0;
@@ -524,9 +524,43 @@ void run_gemm_impl(const RunConfig &cfg) {
 
 // Run with the default tile config: wg_m=1, sg_m=1, wg_n=128, sg_n=16, sg_k=128.
 // (mma_xmx_m == sg_m == 1 makes XMX accept tile_size_m == 1.)
+//
+// global_kslicing (KS) is selected adaptively from N to maintain wave
+// occupancy on Xe2 (~64 Xe-cores). With wg_n=128 the spatial WG count is
+// N/128; we target ~256 WGs (~4 waves) by setting KS = ceil(256 / (N/128))
+// = ceil(32768 / N), clamped to {1,2,4,8}. Empirically this lifts M=1,
+// K=4096 perf at N=8192 from 170 -> 251 GB/s (ks=4) without hurting
+// N=32768 (ks=1).
 void run_gemm(const RunConfig &cfg) {
-    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
-            /*SGK*/128>(cfg);
+    constexpr int kWGN = 128;
+    auto ks_for_n = [](int n) -> int {
+        // ~256 target WGs / (n / wg_n=128) = 32768/n, rounded up to a power
+        // of two in {1,2,4,8}. Only used for the M=1 GEMV-style cases; for
+        // M>1 the spatial M dimension already provides occupancy.
+        if (n <= 4096)  return 8;
+        if (n <= 8192)  return 4;
+        if (n <= 16384) return 2;
+        return 1;
+    };
+    const int ks = (cfg.matrix_m == 1) ? ks_for_n(cfg.matrix_n) : 1;
+    switch (ks) {
+        case 8:
+            run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
+                    /*SGK*/128, /*KS*/8>(cfg);
+            break;
+        case 4:
+            run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
+                    /*SGK*/128, /*KS*/4>(cfg);
+            break;
+        case 2:
+            run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
+                    /*SGK*/128, /*KS*/2>(cfg);
+            break;
+        default:
+            run_gemm_impl</*WGM*/1, /*WGN*/kWGN, /*SGM*/1, /*SGN*/16,
+                    /*SGK*/128, /*KS*/1>(cfg);
+            break;
+    }
 }
 
 // ---------------------------------------------------------------------------

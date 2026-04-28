@@ -433,6 +433,8 @@ private:
         constexpr uint32_t num_block_y
                 = (tile_size_y_b / pack_ratio) / (block_size_y_b / pack_ratio);
         constexpr uint32_t block_b_y_per_scale = dequant_s / block_size_y_b;
+        constexpr uint32_t num_scale_rows
+                = num_block_y / block_b_y_per_scale;
         constexpr uint32_t pack_count = block_size_y_b / pack_ratio;
         constexpr uint32_t BSX = block_size_x_b;
         constexpr uint32_t BSY = block_size_y_b;
@@ -440,87 +442,101 @@ private:
                 "block_size_y_b must be divisible by pack_ratio");
         static_assert((BSY % 2) == 0,
                 "block_size_y_b must be even for VNNI-2 layout");
+        static_assert(num_scale_rows * block_b_y_per_scale == num_block_y,
+                "num_block_y must be a multiple of block_b_y_per_scale");
+
+        // Loop nest order: (scale-row g, n-block j, i-within-scale-row ii).
+        // This hoists the scale load + sign-flip out of the i-dimension so
+        // that for typical configs (k_stride == dequant_s ==> num_scale_rows
+        // == 1, block_b_y_per_scale == num_block_y) the (BSX-wide) scale_u16
+        // / neg_scale_u16 vectors are materialized exactly *once* per j
+        // instead of `block_b_y_per_scale` times. The unpack body is
+        // unchanged.
 #pragma unroll
-        for (uint32_t i = 0; i < num_block_y; ++i) {
+        for (uint32_t g = 0; g < num_scale_rows; ++g) {
 #pragma unroll
             for (uint32_t j = 0; j < num_block_x; ++j) {
-                int block_id = (i * num_block_x + j);
-
-                // matB block: pack_count packed-rows x BSX cols of int2x16.
-                auto matB_blk_u32
-                        = matB.reg
-                                  .xetla_select<matB_t::block_elems, 1>(
-                                          block_id * matB_t::block_elems)
-                                  .xetla_format<uint32_t>();
-
                 // Scale: one fp16 per N-column (BSX-wide), shared across
                 // block_b_y_per_scale Y-blocks.
-                int scale_block_id
-                        = (i / block_b_y_per_scale * num_block_x + j);
+                const int scale_block_id = g * num_block_x + j;
                 auto scale_vec
                         = scale.reg.xetla_select<scale_t::block_size_x, 1>(
                                 scale_block_id * scale_t::block_size_x);
-
-                // Bitwise view of scale, BSX uint16-lanes, and its negation.
                 xetla_vector<uint16_t, BSX> scale_u16
                         = scale_vec.xetla_format<uint16_t>();
                 xetla_vector<uint16_t, BSX> neg_scale_u16
                         = scale_u16 ^ uint16_t(0x8000u); // sign-flip
 
-                // Destination view: BSX*BSY fp16 in VNNI-2 layout, viewed as
-                // uint16 so we can write the bit-pattern result directly.
-                auto dst_blk
-                        = matB_acc.reg.xetla_select<matB_acc_t::block_elems, 1>(
-                                block_id * matB_acc_t::block_elems);
-                auto dst_blk_u16 = dst_blk.xetla_format<uint16_t>();
-
-                // Single fused pass: walk packed rows, and for each of the
-                // 16 codes per word, emit BSX fp16 lanes into VNNI position.
 #pragma unroll
-                for (uint32_t rp = 0; rp < pack_count; ++rp) {
-                    auto src_words
-                            = matB_blk_u32.xetla_select<BSX, 1>(rp * BSX);
+                for (uint32_t ii = 0; ii < block_b_y_per_scale; ++ii) {
+                    const uint32_t i = g * block_b_y_per_scale + ii;
+                    const int block_id = (i * num_block_x + j);
+
+                    // matB block: pack_count packed-rows x BSX cols of int2x16.
+                    auto matB_blk_u32
+                            = matB.reg
+                                      .xetla_select<matB_t::block_elems, 1>(
+                                              block_id * matB_t::block_elems)
+                                      .xetla_format<uint32_t>();
+
+                    // Destination view: BSX*BSY fp16 in VNNI-2 layout, viewed
+                    // as uint16 so we can write the bit-pattern result
+                    // directly.
+                    auto dst_blk
+                            = matB_acc.reg
+                                      .xetla_select<matB_acc_t::block_elems, 1>(
+                                              block_id
+                                              * matB_acc_t::block_elems);
+                    auto dst_blk_u16 = dst_blk.xetla_format<uint16_t>();
+
+                    // Single fused pass: walk packed rows, and for each of
+                    // the 16 codes per word, emit BSX fp16 lanes into VNNI
+                    // position.
 #pragma unroll
-                    for (uint32_t c = 0; c < pack_ratio; ++c) {
-                        // Extract 2-bit code at K-position c of this packed
-                        // row, narrow to uint16.
-                        xetla_vector<uint32_t, BSX> shifted_u32
-                                = (src_words >> (2 * c)) & 0x3u;
-                        xetla_vector<uint16_t, BSX> code_u16
-                                = shifted_u32.xetla_format<uint16_t>()
-                                          .xetla_select<BSX, 2>(0);
+                    for (uint32_t rp = 0; rp < pack_count; ++rp) {
+                        auto src_words
+                                = matB_blk_u32.xetla_select<BSX, 1>(rp * BSX);
+#pragma unroll
+                        for (uint32_t c = 0; c < pack_ratio; ++c) {
+                            // Extract 2-bit code at K-position c of this
+                            // packed row, narrow to uint16.
+                            xetla_vector<uint32_t, BSX> shifted_u32
+                                    = (src_words >> (2 * c)) & 0x3u;
+                            xetla_vector<uint16_t, BSX> code_u16
+                                    = shifted_u32.xetla_format<uint16_t>()
+                                              .xetla_select<BSX, 2>(0);
 
-                        // Branchless masks from the 2 code bits.
-                        //   b0 (= LSB) -> magnitude flag (0/1)
-                        //   b1         -> sign flag      (0/1)
-                        //   0 - bit yields 0x0000 or 0xFFFF (lane mask).
-                        xetla_vector<uint16_t, BSX> mag_mask
-                                = uint16_t(0)
-                                - (code_u16 & uint16_t(1));
-                        xetla_vector<uint16_t, BSX> sign_mask
-                                = uint16_t(0)
-                                - ((code_u16 >> 1) & uint16_t(1));
+                            // Branchless masks from the 2 code bits.
+                            //   b0 (= LSB) -> magnitude flag (0/1)
+                            //   b1         -> sign flag      (0/1)
+                            //   0 - bit yields 0x0000 or 0xFFFF (lane mask).
+                            xetla_vector<uint16_t, BSX> mag_mask
+                                    = uint16_t(0)
+                                    - (code_u16 & uint16_t(1));
+                            xetla_vector<uint16_t, BSX> sign_mask
+                                    = uint16_t(0)
+                                    - ((code_u16 >> 1) & uint16_t(1));
 
-                        // Pick +scale or -scale by sign, then zero out by mag.
-                        // Equivalent to: result = (b0 ? (b1 ? -scale : +scale) : 0).
-                        xetla_vector<uint16_t, BSX> signed_scale
-                                = (sign_mask & neg_scale_u16)
-                                | (~sign_mask & scale_u16);
-                        xetla_vector<uint16_t, BSX> result
-                                = signed_scale & mag_mask;
+                            // Pick +scale or -scale by sign, then zero out
+                            // by mag. Equivalent to:
+                            //   result = b0 ? (b1 ? -scale : +scale) : 0.
+                            xetla_vector<uint16_t, BSX> signed_scale
+                                    = (sign_mask & neg_scale_u16)
+                                    | (~sign_mask & scale_u16);
+                            xetla_vector<uint16_t, BSX> result
+                                    = signed_scale & mag_mask;
 
-                        // Emit at VNNI-2 position. Row inside the block is
-                        // `rp*pack_ratio + c`; that lives at offset
-                        //   k_pair*2*BSX + row_in_pair  (stride 2, length BSX)
-                        // within dst_blk_u16.
-                        constexpr uint32_t /*intentional const for unroll*/
-                                _unused = 0; (void)_unused;
-                        const uint32_t row        = rp * pack_ratio + c;
-                        const uint32_t k_pair     = row >> 1;
-                        const uint32_t row_in_pair = row & 1u;
-                        dst_blk_u16.xetla_select<BSX, 2>(
-                                k_pair * 2u * BSX + row_in_pair)
-                                = result;
+                            // Emit at VNNI-2 position. Row inside the block
+                            // is `rp*pack_ratio + c`; that lives at offset
+                            //   k_pair*2*BSX + row_in_pair (stride 2, len BSX)
+                            // within dst_blk_u16.
+                            const uint32_t row = rp * pack_ratio + c;
+                            const uint32_t k_pair = row >> 1;
+                            const uint32_t row_in_pair = row & 1u;
+                            dst_blk_u16.xetla_select<BSX, 2>(
+                                    k_pair * 2u * BSX + row_in_pair)
+                                    = result;
+                        }
                     }
                 }
             }
