@@ -472,8 +472,6 @@ private:
                                 scale_block_id * scale_t::block_size_x);
                 xetla_vector<uint16_t, BSX> scale_u16
                         = scale_vec.xetla_format<uint16_t>();
-                xetla_vector<uint16_t, BSX> neg_scale_u16
-                        = scale_u16 ^ uint16_t(0x8000u); // sign-flip
 
 #pragma unroll
                 for (uint32_t ii = 0; ii < blocks_per_scale_row; ++ii) {
@@ -499,51 +497,67 @@ private:
 
                     // Single fused pass: walk packed rows, and for each of
                     // the 16 codes per word, emit BSX fp16 lanes into VNNI
-                    // position.
+                    // position. We work at uint16 width: a uint32 word holds
+                    // 16 K-codes packed as (low u16: codes 0..7, high u16:
+                    // codes 8..15), each u16 holding 8 codes of 2 bits.
+                    // Operating at 16-bit width halves the ALU traffic vs.
+                    // shifting the u32 word for every c, and lets us replace
+                    // the (sign_mask & neg_scale) | (~sign_mask & scale)
+                    // blend with a single XOR (sign bit = code bit 1
+                    // shifted into 0x8000).
 #pragma unroll
                     for (uint32_t rp = 0; rp < pack_count; ++rp) {
-                        auto src_words
-                                = matB_blk_u32.xetla_select<BSX, 1>(rp * BSX);
+                        // BSX x u32 -> 2*BSX x u16 (LE: even = low half,
+                        // odd = high half of each word).
+                        auto src_u16 = matB_blk_u32
+                                               .xetla_select<BSX, 1>(rp * BSX)
+                                               .xetla_format<uint16_t>();
+                        auto lo16 = src_u16.xetla_select<BSX, 2>(0);
+                        auto hi16 = src_u16.xetla_select<BSX, 2>(1);
+
 #pragma unroll
-                        for (uint32_t c = 0; c < pack_ratio; ++c) {
-                            // Extract 2-bit code at K-position c of this
-                            // packed row, narrow to uint16.
-                            xetla_vector<uint32_t, BSX> shifted_u32
-                                    = (src_words >> (2 * c)) & 0x3u;
-                            xetla_vector<uint16_t, BSX> code_u16
-                                    = shifted_u32.xetla_format<uint16_t>()
-                                              .xetla_select<BSX, 2>(0);
-
-                            // Branchless masks from the 2 code bits.
-                            //   b0 (= LSB) -> magnitude flag (0/1)
-                            //   b1         -> sign flag      (0/1)
-                            //   0 - bit yields 0x0000 or 0xFFFF (lane mask).
-                            xetla_vector<uint16_t, BSX> mag_mask
-                                    = uint16_t(0)
-                                    - (code_u16 & uint16_t(1));
-                            xetla_vector<uint16_t, BSX> sign_mask
-                                    = uint16_t(0)
-                                    - ((code_u16 >> 1) & uint16_t(1));
-
-                            // Pick +scale or -scale by sign, then zero out
-                            // by mag. Equivalent to:
-                            //   result = b0 ? (b1 ? -scale : +scale) : 0.
-                            xetla_vector<uint16_t, BSX> signed_scale
-                                    = (sign_mask & neg_scale_u16)
-                                    | (~sign_mask & scale_u16);
-                            xetla_vector<uint16_t, BSX> result
-                                    = signed_scale & mag_mask;
-
-                            // Emit at VNNI-2 position. Row inside the block
-                            // is `rp*pack_ratio + c`; that lives at offset
-                            //   k_pair*2*BSX + row_in_pair (stride 2, len BSX)
-                            // within dst_blk_u16.
-                            const uint32_t row = rp * pack_ratio + c;
-                            const uint32_t k_pair = row >> 1;
-                            const uint32_t row_in_pair = row & 1u;
-                            dst_blk_u16.xetla_select<BSX, 2>(
-                                    k_pair * 2u * BSX + row_in_pair)
-                                    = result;
+                        for (uint32_t c = 0; c < pack_ratio / 2; ++c) {
+                            // --- low half: K-position c (0..7) ---
+                            {
+                                xetla_vector<uint16_t, BSX> code_u16
+                                        = (lo16 >> (2 * c))
+                                        & uint16_t(0x3u);
+                                xetla_vector<uint16_t, BSX> sign_xor
+                                        = (code_u16 << 14)
+                                        & uint16_t(0x8000u);
+                                xetla_vector<uint16_t, BSX> mag_mask
+                                        = uint16_t(0)
+                                        - (code_u16 & uint16_t(1));
+                                xetla_vector<uint16_t, BSX> result
+                                        = (scale_u16 ^ sign_xor) & mag_mask;
+                                const uint32_t row = rp * pack_ratio + c;
+                                const uint32_t k_pair = row >> 1;
+                                const uint32_t row_in_pair = row & 1u;
+                                dst_blk_u16.xetla_select<BSX, 2>(
+                                        k_pair * 2u * BSX + row_in_pair)
+                                        = result;
+                            }
+                            // --- high half: K-position c+8 (8..15) ---
+                            {
+                                xetla_vector<uint16_t, BSX> code_u16
+                                        = (hi16 >> (2 * c))
+                                        & uint16_t(0x3u);
+                                xetla_vector<uint16_t, BSX> sign_xor
+                                        = (code_u16 << 14)
+                                        & uint16_t(0x8000u);
+                                xetla_vector<uint16_t, BSX> mag_mask
+                                        = uint16_t(0)
+                                        - (code_u16 & uint16_t(1));
+                                xetla_vector<uint16_t, BSX> result
+                                        = (scale_u16 ^ sign_xor) & mag_mask;
+                                const uint32_t row
+                                        = rp * pack_ratio + c + 8;
+                                const uint32_t k_pair = row >> 1;
+                                const uint32_t row_in_pair = row & 1u;
+                                dst_blk_u16.xetla_select<BSX, 2>(
+                                        k_pair * 2u * BSX + row_in_pair)
+                                        = result;
+                            }
                         }
                     }
                 }
