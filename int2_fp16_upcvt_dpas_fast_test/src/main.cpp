@@ -472,16 +472,16 @@ void run_gemm_impl(const RunConfig &cfg) {
                 * sizeof(data_type_scale);
         const double bytes_total  = bytes_a + bytes_b + bytes_c + bytes_scaleb;
 
-        // GB/s (decimal, 1e9). Switch to GiB/s by dividing by 1024^3 if you
-        // want binary units.
-        double gbs_h = bytes_total / (avg_host_ms   * 1e-3) / 1e9;
-        double gbs_d = bytes_total / (avg_device_ms * 1e-3) / 1e9;
+        // GiB/s (binary, 1024^3).
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        double gbs_h = bytes_total / (avg_host_ms   * 1e-3) / kGiB;
+        double gbs_d = bytes_total / (avg_device_ms * 1e-3) / kGiB;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "Avg host  time: " << avg_host_ms   << " ms ("
-                  << gflops_h << " GFLOPS, " << gbs_h << " GB/s)\n"
+                  << gflops_h << " GFLOPS, " << gbs_h << " GiB/s)\n"
                   << "Avg dev   time: " << avg_device_ms << " ms ("
-                  << gflops_d << " GFLOPS, " << gbs_d << " GB/s)\n"
+                  << gflops_d << " GFLOPS, " << gbs_d << " GiB/s)\n"
                   << "Bytes/GEMM: " << bytes_total / (1024.0 * 1024.0)
                   << " MiB"
                   << "  (A=" << bytes_a / (1024.0 * 1024.0)
