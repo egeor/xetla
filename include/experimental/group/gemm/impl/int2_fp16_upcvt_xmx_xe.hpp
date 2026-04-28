@@ -432,9 +432,17 @@ private:
         constexpr uint32_t num_block_x = tile_size_x_b / block_size_x_b;
         constexpr uint32_t num_block_y
                 = (tile_size_y_b / pack_ratio) / (block_size_y_b / pack_ratio);
-        constexpr uint32_t block_b_y_per_scale = dequant_s / block_size_y_b;
+        // Number of Y-blocks that share one scale row. When dequant_s
+        // exceeds the SG K-tile (e.g. channelwise: dequant_s == K), the SG
+        // sees only one scale row, so all num_block_y blocks share it.
+        constexpr uint32_t block_b_y_per_scale_raw
+                = dequant_s / block_size_y_b;
+        constexpr uint32_t blocks_per_scale_row
+                = (block_b_y_per_scale_raw > num_block_y)
+                ? num_block_y
+                : block_b_y_per_scale_raw;
         constexpr uint32_t num_scale_rows
-                = num_block_y / block_b_y_per_scale;
+                = num_block_y / blocks_per_scale_row;
         constexpr uint32_t pack_count = block_size_y_b / pack_ratio;
         constexpr uint32_t BSX = block_size_x_b;
         constexpr uint32_t BSY = block_size_y_b;
@@ -442,8 +450,8 @@ private:
                 "block_size_y_b must be divisible by pack_ratio");
         static_assert((BSY % 2) == 0,
                 "block_size_y_b must be even for VNNI-2 layout");
-        static_assert(num_scale_rows * block_b_y_per_scale == num_block_y,
-                "num_block_y must be a multiple of block_b_y_per_scale");
+        static_assert(num_scale_rows * blocks_per_scale_row == num_block_y,
+                "num_block_y must be a multiple of blocks_per_scale_row");
 
         // Loop nest order: (scale-row g, n-block j, i-within-scale-row ii).
         // This hoists the scale load + sign-flip out of the i-dimension so
@@ -468,8 +476,8 @@ private:
                         = scale_u16 ^ uint16_t(0x8000u); // sign-flip
 
 #pragma unroll
-                for (uint32_t ii = 0; ii < block_b_y_per_scale; ++ii) {
-                    const uint32_t i = g * block_b_y_per_scale + ii;
+                for (uint32_t ii = 0; ii < blocks_per_scale_row; ++ii) {
+                    const uint32_t i = g * blocks_per_scale_row + ii;
                     const int block_id = (i * num_block_x + j);
 
                     // matB block: pack_count packed-rows x BSX cols of int2x16.
