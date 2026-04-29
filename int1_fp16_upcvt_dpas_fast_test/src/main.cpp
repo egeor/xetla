@@ -78,6 +78,13 @@ struct RunConfig {
     // A/B/ScaleB inputs (and is validated against its own gold reference).
     // Default false: one host init is broadcast to all sets.
     bool distinct_sets = false;
+    // Manual tile override (sweep mode). When override_wg_n > 0, run_gemm()
+    // dispatches to the (wg_n, KS, LS) instantiation matching the override
+    // values, bypassing the auto-tier logic. wg_n in {32,64,128},
+    // KS in {1,2,4}, LS in {1,2,4}.
+    int override_wg_n = 0;
+    int override_ks   = 0;
+    int override_ls   = 0;
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
@@ -606,27 +613,58 @@ void run_gemm_impl(const RunConfig &cfg) {
 // Run with the default tile config: wg_m=1, sg_m=1, sg_n=16, sg_k=128.
 // (mma_xmx_m == sg_m == 1 makes XMX accept tile_size_m == 1.)
 //
-// Tile shape and KS are tuned via sweep on M=1 GEMV (Xe2, ~64 Xe-cores):
-//   sg_n=16 is mandatory (HW caps block_size_x_b=16).
-//   sg_k=128 is noise-equivalent to 64/256.
-//   wg_n is selected adaptively from N: wg_n=32 reduces per-WG B
-//     footprint and quadruples spatial parallelism, which wins at very
-//     small N (N<=4096); but at larger N the increased WG-launch and
-//     scheduling overhead outweighs that benefit, so we keep wg_n=128.
-//   global_kslicing (KS) provides extra logical groups via K-reduction
-//     when spatial WG count is below the device wave width.
-// Empirical M=1, K=4096 perf:
-//   N=4096  : 290 GB/s (wg_n=32,  KS=2, LS=4)
-//   N=6144  : 319 GB/s (wg_n=64,  KS=1, LS=4)
-//   N=8192  : 332 GB/s (wg_n=64,  KS=1, LS=4)
-//   N=16384 : 322 GB/s (wg_n=128, KS=2)
-//   N=32768 : 362 GB/s (wg_n=128, KS=1)
+// M=1 (GEMV) tile selection, K=4096, tuned on Xe2 0xe223. Tiers match the
+// int2 driver's N boundaries (4096 / 8192 / 16384) but with int1-specific
+// (wg_n, KS, LS) winners (only B traffic differs vs int2: 1 bit/wt, K*N/8).
+//   N <= 4096        : wg_n=32, KS=2, LS=4   -> ~231 GiB/s @ N=4096
+//   4096 < N <= 8192 : wg_n=64, KS=1, LS=4   -> ~264-307 GiB/s
+//   8192 < N <= 16384: wg_n=64, KS=1, LS=2   -> ~300-332 GiB/s
+//   N > 16384        : wg_n=64, KS=1, LS=2   -> ~346 GiB/s @ N=32768
+//
+// Same wave-alignment dip story as int2: wg_n=128 only wins at multiples
+// of 128 that are wave-aligned (12288, 16384) and loses 5-12% at
+// off-aligned N (9216, 10240, 13312, 14336). wg_n=64 keeps the WG count
+// high enough to fill multiple waves uniformly across the full range.
+// Compared to int2's top tier (wg_n=128 KS=1), int1 prefers wg_n=64
+// KS=1 LS=2 by 2-3% at large N -- the cheaper int1 dequant lets a
+// 2-way SLM K-reduce stay net-positive at higher N.
 void run_gemm(const RunConfig &cfg) {
-    // For M=1, dispatch to one of three GEMV-tuned tiers based on N. For
+    // ----- Manual sweep override -----
+    if (cfg.override_wg_n > 0 && cfg.override_ks > 0 && cfg.override_ls > 0) {
+        const int W = cfg.override_wg_n;
+        const int KS_ = cfg.override_ks;
+        const int LS_ = cfg.override_ls;
+#define DISPATCH(W_, K_, L_) \
+    if (W == W_ && KS_ == K_ && LS_ == L_) { \
+        run_gemm_impl</*WGM*/1, /*WGN*/W_, /*SGM*/1, /*SGN*/16, \
+                /*SGK*/128, /*KS*/K_, /*LS*/L_>(cfg); \
+        return; \
+    }
+        DISPATCH(32, 1, 1) DISPATCH(32, 1, 2) DISPATCH(32, 1, 4)
+        DISPATCH(32, 2, 1) DISPATCH(32, 2, 2) DISPATCH(32, 2, 4)
+        DISPATCH(32, 4, 1) DISPATCH(32, 4, 2) DISPATCH(32, 4, 4)
+        DISPATCH(64, 1, 1) DISPATCH(64, 1, 2) DISPATCH(64, 1, 4)
+        DISPATCH(64, 2, 1) DISPATCH(64, 2, 2) DISPATCH(64, 2, 4)
+        DISPATCH(64, 4, 1) DISPATCH(64, 4, 2) DISPATCH(64, 4, 4)
+        DISPATCH(128, 1, 1) DISPATCH(128, 1, 2) DISPATCH(128, 1, 4)
+        DISPATCH(128, 2, 1) DISPATCH(128, 2, 2) DISPATCH(128, 2, 4)
+        DISPATCH(128, 4, 1) DISPATCH(128, 4, 2) DISPATCH(128, 4, 4)
+#undef DISPATCH
+        std::cerr << "Override (wg_n=" << W << " ks=" << KS_
+                  << " ls=" << LS_ << ") not in dispatch grid\n";
+        std::exit(1);
+    }
+
+    // For M=1, dispatch to one of four GEMV-tuned tiers based on N. For
     // M>1 the wider wg_n=128 is a small but consistent win.
     const bool gemv_tiny_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
     const bool gemv_mid_n  = (cfg.matrix_m == 1) && (cfg.matrix_n > 4096)
             && (cfg.matrix_n <= 8192);
+    // M=1 above 8192: single tier wg_n=64 KS=1 LS=2 wins both the
+    // upper-mid (8192 < N <= 16384) range AND the very-large N range
+    // (>16384) on int1 (sweep across N in {9216, 10240, 11264, 12288,
+    // 13312, 14336, 15360, 16384, 32768}).
+    const bool gemv_upper_n = (cfg.matrix_m == 1) && (cfg.matrix_n > 8192);
 
     auto ks_for_n = [](int n) -> int {
         if (n <= 4096)  return 4;
@@ -648,23 +686,21 @@ void run_gemm(const RunConfig &cfg) {
         return;
     }
 
-    // Upper-mid-N GEMV (8192 < N <= 16384). wg_n=64 with KS=1 and LS=2.
-    // The wider wg_n=128 here gives strong perf only at multiples of 128
-    // that align with one-wave dispatch (N in {12288, 16384}); at the
-    // off-alignment N values (10240, 13312, 14336) the spatial WG count
-    // straddles a wave boundary and perf drops to ~260 GiB/s. wg_n=64
-    // keeps WG count high enough to fully fill multiple waves uniformly,
-    // smoothing the curve to 295-324 GiB/s across the full range
-    // (vs 234-324 with wg_n=128). Keeping LS=2 (instead of mid-N's LS=4)
-    // is +30-40 GiB/s here -- larger N tolerates less SLM K-reduce.
-    const bool gemv_upper_mid_n
-            = (cfg.matrix_m == 1) && (cfg.matrix_n > 8192) && (cfg.matrix_n <= 16384);
-    if (gemv_upper_mid_n) {
+    if (gemv_upper_n) {
+        // wg_n=64 KS=1 LS=2:
+        //   - At off-aligned N (9216, 10240, 13312, 14336) wg_n=128 dips
+        //     5-12%; wg_n=64 keeps WG count high enough to fill multiple
+        //     waves uniformly.
+        //   - At well-aligned N (12288, 16384) wg_n=128 is only ~1-2%
+        //     ahead -- not worth the off-alignment penalty.
+        //   - At very large N (32768) wg_n=64 KS=1 LS=2 = 346 GiB/s,
+        //     beating wg_n=128 KS=1 LS=1 (= 343 GiB/s).
         run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
                 /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
         return;
     }
 
+    // ----- M > 1 fallback (unchanged from int2 driver) -----
     constexpr int kWGN = 128;
     switch (ks) {
         case 4:
@@ -709,6 +745,12 @@ int main(int argc, char **argv) {
             cfg.min_footprint_gb = std::atof(argv[++i]);
             if (cfg.min_footprint_gb < 0.0) cfg.min_footprint_gb = 0.0;
         }
+        else if (a == "--wg-n" && i + 1 < argc)
+            parse_int("--wg-n", argv[++i], cfg.override_wg_n);
+        else if (a == "--ks" && i + 1 < argc)
+            parse_int("--ks", argv[++i], cfg.override_ks);
+        else if (a == "--ls" && i + 1 < argc)
+            parse_int("--ls", argv[++i], cfg.override_ls);
         else if (a == "-h" || a == "--help") {
             std::cout << "Usage: " << argv[0]
                       << " [--m M] [--n N] [--k K] [--iters N]"
