@@ -41,10 +41,10 @@ namespace gpu::xetla::group {
 template <typename compute_attr_, typename perf_tuning_knob_,
         typename tile_shape_, typename mem_desc_a_t_, typename mem_desc_b_t_,
         typename dtype_scale_, int dequant_s_, int mma_xmx_m_,
-        typename pre_processing_t_>
+        bool use_unaligned_n_, typename pre_processing_t_>
 class gemm_t<compute_policy_int2_fp16_upcvt_xmx<compute_attr_,
                      perf_tuning_knob_, dtype_scale_, dequant_s_,
-                     mma_xmx_m_, gpu_arch::Xe>,
+                     mma_xmx_m_, gpu_arch::Xe, use_unaligned_n_>,
         tile_shape_, mem_desc_a_t_, mem_desc_b_t_, pre_processing_t_> {
 public:
     using mem_desc_a_t = mem_desc_a_t_;
@@ -53,7 +53,7 @@ public:
     using pre_processing_t = pre_processing_t_;
     using compute_policy = compute_policy_int2_fp16_upcvt_xmx<compute_attr_,
             perf_tuning_knob_, dtype_scale_, dequant_s_, mma_xmx_m_,
-            gpu_arch::Xe>;
+            gpu_arch::Xe, use_unaligned_n_>;
     static constexpr uint32_t k_stride = compute_policy::k_stride;
 
     static constexpr uint32_t sg_tile_m = tile_shape::sg_tile_size_y;
@@ -156,9 +156,32 @@ private:
             tile_size_y_b / pack_ratio, block_size_x_b,
             block_size_y_b / pack_ratio, reg_layout::tiled>;
     using matB_t = subgroup::tile_t<dtype_b, matB_tile_desc_t>;
-    using matB_payload_t = subgroup::mem_payload_t<mem_desc_b_t,
+    // Per-packed-K-row tile (1 row of int2x16). Used when
+    // compute_policy::use_unaligned_n is true: one block_1d HW load per row,
+    // 8 rows per matB tile. block_1d has no surface-pitch alignment so any
+    // matrix_n is supported with no driver-side padding.
+    using matB_row_tile_desc_t = subgroup::tile_desc_t<tile_size_x_b, 1,
+            block_size_x_b, 1, reg_layout::tiled>;
+    using matB_row_t = subgroup::tile_t<dtype_b, matB_row_tile_desc_t>;
+    using matB_block2d_payload_t = subgroup::mem_payload_t<mem_desc_b_t,
             matB_tile_desc_t,
             subgroup::msg_type_v<matB_tile_desc_t, mem_space_b>, arch_tag>;
+    // For block_1d we force a 1-element (==4-byte) mem-desc alignment so
+    // the per-row load picks `mem_dtype = uint32_t` rather than
+    // `uint64_t`. With odd matrix_n the row pitch in bytes is 4 mod 8,
+    // which would violate u64-load alignment. u32 loads are fine for
+    // any 4-byte-aligned row offset.
+    using mem_desc_b_block1d_t = mem_desc_t<dtype_b, mem_desc_b_t::layout,
+            mem_desc_b_t::space, /*alignment=*/1>;
+    using matB_row_payload_t = subgroup::mem_payload_t<mem_desc_b_block1d_t,
+            matB_row_tile_desc_t, msg_type::block_1d, arch_tag>;
+    using matB_payload_t = std::conditional_t<compute_policy::use_unaligned_n,
+            matB_row_payload_t, matB_block2d_payload_t>;
+    static_assert(!compute_policy::use_unaligned_n
+                    || std::is_same_v<typename matB_row_payload_t::mem_dtype,
+                            uint32_t>,
+            "block_1d matB row load must use u32 mem_dtype to tolerate "
+            "4-byte-aligned-but-not-8 row offsets");
     using matB_prefetch_payload_t = subgroup::prefetch_payload_t<mem_desc_b_t,
             matB_tile_desc_t, wg_size_y, arch_tag>;
 
@@ -187,6 +210,12 @@ public:
 
     using mem_desc_scale_t
             = mem_desc_t<dtype_scale, mem_layout::row_major, mem_space::global>;
+    // 1-elt-aligned alias used on the unaligned-N path so the scale
+    // payload picks `mem_dtype = fp16` (per-lane fp16 loads, 2-byte
+    // aligned) instead of u64/u32 which would need scale_ld %4 / %2.
+    using mem_desc_scale_unaligned_t
+            = mem_desc_t<dtype_scale, mem_layout::row_major, mem_space::global,
+                    /*alignment=*/1>;
 
     using matAcc_tile_desc_t = subgroup::tile_desc_t<tile_size_x_c,
             tile_size_y_c, block_size_x_b, block_size_y_a, reg_layout::tiled>;
@@ -197,10 +226,16 @@ private:
             = subgroup::tile_desc_t<tile_size_x_b, tile_size_y_scale,
                     block_size_x_b, block_size_y_scale, reg_layout::tiled>;
     using scale_t = subgroup::tile_t<dtype_scale, scale_tile_desc_t>;
-    using scale_payload_t
+    using scale_block2d_payload_t
             = subgroup::mem_payload_t<mem_desc_scale_t, scale_tile_desc_t,
                     subgroup::msg_type_v<scale_tile_desc_t, mem_space::global>,
                     arch_tag>;
+    using scale_unaligned_payload_t
+            = subgroup::mem_payload_t<mem_desc_scale_unaligned_t,
+                    scale_tile_desc_t, msg_type::unaligned_2d, arch_tag>;
+    using scale_payload_t
+            = std::conditional_t<compute_policy::use_unaligned_n,
+                    scale_unaligned_payload_t, scale_block2d_payload_t>;
     using scale_prefetch_payload_t
             = subgroup::prefetch_payload_t<mem_desc_scale_t, scale_tile_desc_t,
                     1, arch_tag>;
@@ -303,8 +338,31 @@ public:
         scale_t scale;
 
         matA_payload_t matA_payload(args.matA_base_desc);
-        matB_payload_t matB_payload(args.matB_base_desc);
-        scale_payload_t scale_payload(args.scale_base_desc);
+        // For the unaligned-N path we wrap the (8-elt-aligned) matB
+        // mem-desc in a 1-elt-aligned alias so block_1d picks u32 loads.
+        auto make_matB_payload = [&]() {
+            if constexpr (compute_policy::use_unaligned_n) {
+                mem_desc_b_block1d_t md(args.matB_base_desc.base,
+                        args.matB_base_desc.shape, args.matB_base_desc.coord);
+                return matB_payload_t(md);
+            } else {
+                return matB_payload_t(args.matB_base_desc);
+            }
+        };
+        matB_payload_t matB_payload = make_matB_payload();
+        // For the unaligned-N path we wrap the scale mem-desc in a
+        // 1-elt-aligned alias so unaligned_2d picks fp16 mem_dtype.
+        auto make_scale_payload = [&]() {
+            if constexpr (compute_policy::use_unaligned_n) {
+                mem_desc_scale_unaligned_t md(args.scale_base_desc.base,
+                        args.scale_base_desc.shape,
+                        args.scale_base_desc.coord);
+                return scale_payload_t(md);
+            } else {
+                return scale_payload_t(args.scale_base_desc);
+            }
+        };
+        scale_payload_t scale_payload = make_scale_payload();
         matA_prefetch_payload_t matA_prefetch_payload(
                 args.matA_base_desc, sg_idx);
         matB_prefetch_payload_t matB_prefetch_payload(
@@ -326,8 +384,10 @@ public:
         for (uint32_t i = 0; i < stages; i++) {
             subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
                     matA_prefetch_payload);
-            subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
-                    matB_prefetch_payload);
+            if constexpr (!compute_policy::use_unaligned_n) {
+                subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
+                        matB_prefetch_payload);
+            }
             subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
                     scale_prefetch_payload);
             scale_prefetch_addr_i++;
@@ -351,8 +411,29 @@ public:
             }
             subgroup::tile_load<cache_hint::cached, cache_hint::cached>(
                     matA, matA_payload);
-            subgroup::tile_load<cache_hint::cached, cache_hint::cached>(
-                    matB, matB_payload);
+            if constexpr (compute_policy::use_unaligned_n) {
+                // Per-packed-K-row block_1d load: 8 HW loads, one cache line
+                // each, advancing y by 1 packed row per call. Total advance
+                // after the loop equals matB_t::tile_size_y, so the post-load
+                // update_tdesc(matB_t::tile_size_y) below is skipped.
+                constexpr uint32_t row_count
+                        = matB_t::tile_size_y; // 8 packed rows
+                constexpr uint32_t row_elems
+                        = matB_t::tile_size_x; // 16 int2x16 cols
+                #pragma unroll
+                for (uint32_t r = 0; r < row_count; ++r) {
+                    matB_row_t matB_row;
+                    subgroup::tile_load<cache_hint::cached, cache_hint::cached>(
+                            matB_row, matB_payload);
+                    matB.reg.xetla_format<uint32_t>()
+                            .xetla_select<row_elems, 1>(r * row_elems)
+                            = matB_row.reg.xetla_format<uint32_t>();
+                    matB_payload.template update_tdesc<update_dir_b>(1);
+                }
+            } else {
+                subgroup::tile_load<cache_hint::cached, cache_hint::cached>(
+                        matB, matB_payload);
+            }
             subgroup::tile_load<cache_hint::cached, cache_hint::cached>(
                     scale, scale_payload);
             scale_load_addr_i++;
@@ -360,8 +441,10 @@ public:
             if constexpr (stages != 0) {
                 subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
                         matA_prefetch_payload);
-                subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
-                        matB_prefetch_payload);
+                if constexpr (!compute_policy::use_unaligned_n) {
+                    subgroup::tile_prefetch<cache_hint::cached,
+                            cache_hint::cached>(matB_prefetch_payload);
+                }
                 subgroup::tile_prefetch<cache_hint::cached, cache_hint::cached>(
                         scale_prefetch_payload);
                 scale_prefetch_addr_i++;
@@ -369,8 +452,10 @@ public:
             SW_BARRIER();
             matA_payload.template update_tdesc<update_dir_a>(
                     matA_t::tile_size_x);
-            matB_payload.template update_tdesc<update_dir_b>(
-                    matB_t::tile_size_y);
+            if constexpr (!compute_policy::use_unaligned_n) {
+                matB_payload.template update_tdesc<update_dir_b>(
+                        matB_t::tile_size_y);
+            }
             if ((scale_load_addr_i % scale_addr_update_freq) == 0) {
                 scale_payload.template update_tdesc<tdesc_update_dir::y_dir>(
                         scale_t::tile_size_y);

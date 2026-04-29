@@ -82,7 +82,8 @@ struct RunConfig {
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
-template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS, int LS = 1>
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS, int LS = 1,
+        bool kUnaligned = false>
 class int2_fp16_upcvt_kernel;
 
 // ---------------------------------------------------------------------------
@@ -119,18 +120,19 @@ static inline int int2_code_to_value(uint32_t code) {
 template <typename DTypeC>
 static void compute_gold(const fp16 *A, const uint32_t *B_packed,
         const fp16 *ScaleB, DTypeC *gold_C, int M, int K, int N,
-        int scale_gs) {
+        int scale_gs, int ldb, int ld_scale) {
     const int ks_groups = K / scale_gs;
 #pragma omp parallel for collapse(2)
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < N; ++j) {
             float accum = 0.0f;
             for (int gk = 0; gk < ks_groups; ++gk) {
-                float scale = static_cast<float>(ScaleB[gk * N + j]);
+                float scale
+                        = static_cast<float>(ScaleB[gk * ld_scale + j]);
                 float partial = 0.0f;
                 for (int p = 0; p < scale_gs; ++p) {
                     int ik = gk * scale_gs + p;
-                    uint32_t word = B_packed[(ik / 16) * N + j];
+                    uint32_t word = B_packed[(ik / 16) * ldb + j];
                     uint32_t code = (word >> (2 * (ik % 16))) & 0x3u;
                     int bv = int2_code_to_value(code);
                     if (bv != 0) {
@@ -159,8 +161,9 @@ static bool compare_against_gold(const DTypeC *C, const DTypeC *gold_C,
 // ---------------------------------------------------------------------------
 // Run one GEMM with compile-time tile sizes.
 
-template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1, int LS = 1>
-void run_gemm_impl(const RunConfig &cfg) {
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1, int LS = 1,
+        bool kUnaligned = false>
+void run_gemm_impl_inner(const RunConfig &cfg) {
     using data_type_a   = fp16;
     using data_type_b   = int2x16;
     using data_type_c   = fp16;
@@ -222,13 +225,15 @@ void run_gemm_impl(const RunConfig &cfg) {
     using compute_policy
             = gpu::xetla::group::compute_policy_int2_fp16_upcvt_xmx<compute_attr,
                     perf_tuning_knob, data_type_scale, kScaleGS,
-                    /*mma_xmx_m=*/SGM, arch_tag>;
+                    /*mma_xmx_m=*/SGM, arch_tag, /*use_unaligned_n=*/kUnaligned>;
     using gemm_t = gpu::xetla::group::gemm_t<compute_policy, tile_shape,
             mem_desc_a_t, mem_desc_b_t>;
 
-    using epilogue_t = gpu::xetla::group::epilogue_t<
-            gpu::xetla::group::epilogue_policy_default<arch_tag>, tile_shape,
-            mem_desc_c_t>;
+    using epilogue_policy_t = std::conditional_t<kUnaligned,
+            gpu::xetla::group::epilogue_policy_unaligned<arch_tag>,
+            gpu::xetla::group::epilogue_policy_default<arch_tag>>;
+    using epilogue_t = gpu::xetla::group::epilogue_t<epilogue_policy_t,
+            tile_shape, mem_desc_c_t>;
     using group_swizzle = gpu::xetla::kernel::group_swizzle_default<arch_tag>;
     using gemm_op_t = gpu::xetla::kernel::gemm_universal_t<
             gpu::xetla::kernel::dispatch_policy_int2_fp16_upcvt_kslicing<
@@ -236,12 +241,23 @@ void run_gemm_impl(const RunConfig &cfg) {
             gemm_t, epilogue_t>;
 
     // ----- Sizes -----
+    // Zero driver-side LD padding: matB_ld == matC_ld == scale_ld ==
+    // matrix_n. The aligned-N (N % 4 == 0) compile path uses block_2d
+    // on matB/matC and gets HW pitch alignment for free. The
+    // arbitrary-N path uses block_1d on matB (per-packed-row loads),
+    // unaligned_2d on matC, and unaligned_2d on scale -- all three
+    // accept any pitch with zero padding.
+    const uint32_t ldb_padded = static_cast<uint32_t>(N);
+    const uint32_t ldc_padded = static_cast<uint32_t>(N);
+    const uint32_t lds_padded = static_cast<uint32_t>(N);
     const size_t size_a = static_cast<size_t>(M) * K;
     const size_t size_b_words
-            = static_cast<size_t>(K / 16) * N; // int2x16 words
-    const size_t size_c = static_cast<size_t>(M) * N;
+            = static_cast<size_t>(K / 16) * ldb_padded; // int2x16 words
+    // Device matC uses padded LD; host C/gold stay at logical M*N.
+    const size_t size_c        = static_cast<size_t>(M) * ldc_padded;
+    const size_t size_c_host   = static_cast<size_t>(M) * N;
     const int    ks_groups   = K / gs;
-    const size_t size_scale_b = static_cast<size_t>(ks_groups) * N;
+    const size_t size_scale_b = static_cast<size_t>(ks_groups) * lds_padded;
     const size_t size_acc = gemm_op_t::get_acc_buf_size(M, N);
     const size_t size_cnt = gemm_op_t::get_cnt_buf_size(M, N);
 
@@ -278,7 +294,7 @@ void run_gemm_impl(const RunConfig &cfg) {
     auto B_h = static_cast<data_type_b *>(
             malloc_host(size_b_words * sizeof(data_type_b), context));
     auto C_h = static_cast<data_type_c *>(
-            malloc_host(size_c * sizeof(data_type_c), context));
+            malloc_host(size_c_host * sizeof(data_type_c), context));
     auto ScaleB_h = static_cast<data_type_scale *>(
             malloc_host(size_scale_b * sizeof(data_type_scale), context));
 
@@ -320,13 +336,15 @@ void run_gemm_impl(const RunConfig &cfg) {
         gold_C_set.resize(num_golds);
         for (int g = 0; g < num_golds; ++g) {
             gold_C_set[g] = static_cast<data_type_c *>(malloc_host(
-                    size_c * sizeof(data_type_c), context));
+                    size_c_host * sizeof(data_type_c), context));
         }
         // Gold for the shared init (also serves as gold[0] for distinct_sets,
         // since we'll reuse the current host buffers for set 0 below).
         compute_gold<data_type_c>(A_h,
                 reinterpret_cast<const uint32_t *>(B_h), ScaleB_h,
-                gold_C_set[0], M, K, N, gs);
+                gold_C_set[0], M, K, N, gs,
+                static_cast<int>(ldb_padded),
+                static_cast<int>(lds_padded));
     }
 
     // ----- Allocate `num_sets` distinct device buffer sets -----
@@ -363,7 +381,9 @@ void run_gemm_impl(const RunConfig &cfg) {
             if (cfg.validate) {
                 compute_gold<data_type_c>(A_h,
                         reinterpret_cast<const uint32_t *>(B_h),
-                        ScaleB_h, gold_C_set[s], M, K, N, gs);
+                        ScaleB_h, gold_C_set[s], M, K, N, gs,
+                        static_cast<int>(ldb_padded),
+                        static_cast<int>(lds_padded));
             }
         }
         queue.memcpy(A_d_set[s], A_h,
@@ -388,9 +408,9 @@ void run_gemm_impl(const RunConfig &cfg) {
 
     // ----- Build args (set 0; per-iter args are rebuilt below) -----
     uint32_t lda = K;
-    uint32_t ldb = N;          // pitch in fp16-equivalent N columns
-    uint32_t ldc = N;
-    uint32_t ld_scale_b = N;
+    uint32_t ldb = ldb_padded;       // matB int2x16 pitch (next-even N)
+    uint32_t ldc = ldc_padded;       // matC fp16   pitch (next-mul-of-4 N)
+    uint32_t ld_scale_b = lds_padded; // ScaleB block_1d pitch (next-mul-of-16)
 
     typename gemm_op_t::arguments_t gemm_arg(M, K, N, A_d_set[0], lda,
             B_d_set[0], ldb, C_d_set[0], ldc, ScaleB_d_set[0], ld_scale_b,
@@ -410,7 +430,8 @@ void run_gemm_impl(const RunConfig &cfg) {
     profiling_helper prof("int2_fp16_upcvt_gemm",
             2.0 * static_cast<double>(M) * N * K, "gflops");
 
-    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK, KS, LS>;
+    using kernel_name_t = int2_fp16_upcvt_kernel<WGM, WGN, SGM, SGN, SGK, KS, LS,
+            kUnaligned>;
 
     double host_total_ms = 0.0;
     double device_total_ns = 0.0;
@@ -499,8 +520,19 @@ void run_gemm_impl(const RunConfig &cfg) {
         int passed = 0;
         int failed = 0;
         for (int s = 0; s < num_sets; ++s) {
-            queue.memcpy(C_h, C_d_set[s],
-                    size_c * sizeof(data_type_c)).wait();
+            // Device matC has padded LD = ldc_padded; strip to logical N
+            // on host. For M=1 this is just one transfer.
+            if (ldc_padded == static_cast<uint32_t>(N)) {
+                queue.memcpy(C_h, C_d_set[s],
+                        size_c_host * sizeof(data_type_c)).wait();
+            } else {
+                for (int r = 0; r < M; ++r) {
+                    queue.memcpy(C_h + static_cast<size_t>(r) * N,
+                            C_d_set[s] + static_cast<size_t>(r) * ldc_padded,
+                            static_cast<size_t>(N) * sizeof(data_type_c));
+                }
+                queue.wait();
+            }
             const data_type_c *gold_C
                     = cfg.distinct_sets ? gold_C_set[s] : gold_C_set[0];
             std::string label = "int2 fp16 upcvt GEMM validation [set "
@@ -515,7 +547,7 @@ void run_gemm_impl(const RunConfig &cfg) {
                 // Shared-init fast path: every set's C should match gold[0]
                 // bytewise. Fall back to tolerance check on mismatch.
                 bool bytewise_eq = (std::memcmp(C_h, gold_C,
-                                            size_c * sizeof(data_type_c))
+                                            size_c_host * sizeof(data_type_c))
                         == 0);
                 if (bytewise_eq) {
                     ok = true;
@@ -549,6 +581,25 @@ void run_gemm_impl(const RunConfig &cfg) {
     }
     free(Acc_d, context);
     free(Cnt_d, context);
+}
+
+// Wrapper that dispatches between the aligned-N (block_2d on matB+matC) and
+// arbitrary-N (block_1d per-row matB + unaligned_2d matC) compiled
+// instantiations based on `matrix_n`. The aligned path requires:
+//   - matB int2x16 (4B/elt): pitch-bytes %8  -> N %2.
+//   - matC fp16   (2B/elt): pitch-bytes %8  -> N %4.
+// So we take the aligned fast path when (N % 4 == 0); otherwise we use
+// the arbitrary-N path which has zero driver-side LD padding (matB_ld =
+// matC_ld = scale_ld = matrix_n).
+template <int WGM, int WGN, int SGM, int SGN, int SGK, int KS = 1, int LS = 1>
+void run_gemm_impl(const RunConfig &cfg) {
+    if ((cfg.matrix_n % 4) == 0) {
+        run_gemm_impl_inner<WGM, WGN, SGM, SGN, SGK, KS, LS,
+                /*kUnaligned=*/false>(cfg);
+    } else {
+        run_gemm_impl_inner<WGM, WGN, SGM, SGN, SGK, KS, LS,
+                /*kUnaligned=*/true>(cfg);
+    }
 }
 
 // Run with the default tile config: wg_m=1, sg_m=1, sg_n=16, sg_k=128.
@@ -585,22 +636,12 @@ void run_gemm(const RunConfig &cfg) {
     const int ks = (cfg.matrix_m == 1) ? ks_for_n(cfg.matrix_n) : 1;
 
     if (gemv_tiny_n) {
-        // wg_n=32 GEMV path. Cooperative K-slicing across 4 SGs/WG via SLM
-        // reduce (LS=4), plus 2 global K-slices (KS=2). Total 8 SGs do K
-        // for each WG-N tile, halving global launches vs KS=4/LS=1 and
-        // hiding more launch+memory latency at small N.
         run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
                 /*SGK*/128, /*KS*/2, /*LS*/4>(cfg);
         return;
     }
 
     if (gemv_mid_n) {
-        // Mid-N GEMV (4096 < N <= 8192). wg_n=64 with no global K-slice
-        // (KS=1) and 4-way SLM K-reduce (LS=4). Spatial WG count
-        // (N/64 in {96,128}) lands within one to two GPU waves and
-        // KS=1 avoids redundant atomic/reduction passes that hurt this
-        // regime. Beats wg_n=128/KS=4 (the prior path) by +16-19% at
-        // N in {6144, 8192}.
         run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
                 /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
         return;

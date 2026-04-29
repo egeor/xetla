@@ -162,21 +162,31 @@ struct compute_policy_int2_fp16_dpas_xmx<compute_attr_, perf_tuning_knob_,
 ///                   means use the arch default (8). Use 1..7 for small-M GEMV
 ///                   shapes so that sg_tile_m == 1 still satisfies the
 ///                   tile_mma `tile_size_m % mma_m == 0` constraint.
+/// @tparam use_unaligned_n_ When true, matB is loaded via per-row block_1d
+///                          messages (one HW load per packed-K row) instead
+///                          of a single block_2d descriptor. This drops the
+///                          surface-pitch alignment requirement on matB so
+///                          arbitrary `matrix_n` is supported with no
+///                          driver-side padding. The caller is expected to
+///                          pair this with `epilogue_policy_unaligned` for
+///                          matC (default epilogue forces block_2d on matC).
 template <typename compute_attr_, typename perf_tuning_knob_,
         typename dtype_scale_, int dequant_s_, int mma_xmx_m_ = 0,
-        gpu_arch arch_tag_ = gpu_arch::Xe>
+        gpu_arch arch_tag_ = gpu_arch::Xe, bool use_unaligned_n_ = false>
 struct compute_policy_int2_fp16_upcvt_xmx {};
 
 template <typename compute_attr_, typename perf_tuning_knob_,
-        typename dtype_scale_, int dequant_s_, int mma_xmx_m_>
+        typename dtype_scale_, int dequant_s_, int mma_xmx_m_,
+        bool use_unaligned_n_>
 struct compute_policy_int2_fp16_upcvt_xmx<compute_attr_, perf_tuning_knob_,
-        dtype_scale_, dequant_s_, mma_xmx_m_, gpu_arch::Xe> {
+        dtype_scale_, dequant_s_, mma_xmx_m_, gpu_arch::Xe, use_unaligned_n_> {
     using compute_attr = compute_attr_;
     using perf_tuning_knob = perf_tuning_knob_;
     static constexpr int k_stride = perf_tuning_knob::k_stride;
     static constexpr int stages = perf_tuning_knob::stages;
     static constexpr int sync_freq = perf_tuning_knob::sync_freq;
     static constexpr gpu_arch arch_tag = gpu_arch::Xe;
+    static constexpr bool use_unaligned_n = use_unaligned_n_;
     using dtype_mma_acc = typename compute_attr::dtype_acc; // float
     using dtype_mma_a = typename compute_attr::dtype_a;     // fp16
     using dtype_mma_b = typename compute_attr::dtype_b;     // fp16
