@@ -78,8 +78,16 @@ How the unaligned path stays correct without padding:
   is built on a 1-elt-aligned `mem_desc_b` alias which forces the
   block_1d `mem_dtype` to `uint32_t` — that works for any 4-byte
   aligned `ldb` (block_2d would require `ldb % 2`, i.e. N even).
-* matC fp16 (2 B/elt): `unaligned_2d` is OOB-checked per lane and has
-  no pitch alignment requirement.
+* matC fp16 (2 B/elt): `unaligned_2d` is OOB-checked per lane, but
+  the OOB predicate granularity equals the payload's inferred
+  `mem_dtype`. With the default `mem_desc` alignment (8 elements ⇒
+  `alignment_in_bytes = 16`) the payload would pick
+  `mem_dtype = uint64_t` (4 fp16/lane) and over-write up to 3 fp16s
+  past row end on any N not multiple of 4 — silent for M=1 (USM page
+  slack absorbs it) but corrupts row+1 for M>1. The driver therefore
+  hands the unaligned epilogue a 1-elt-aligned `mem_desc_c` alias
+  which forces `mem_dtype = fp16` and per-element OOB. Same canonical
+  pattern as `tests/integration/gemm/unaligned_bf16/kernel_func.hpp`.
 * scale fp16 (2 B/elt): switches to `unaligned_2d` on a 1-elt-aligned
   `mem_desc_scale` alias so per-lane fp16 loads handle any `scale_ld`.
 

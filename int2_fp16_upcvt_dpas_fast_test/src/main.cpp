@@ -232,8 +232,19 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
     using epilogue_policy_t = std::conditional_t<kUnaligned,
             gpu::xetla::group::epilogue_policy_unaligned<arch_tag>,
             gpu::xetla::group::epilogue_policy_default<arch_tag>>;
+    // For the unaligned path we MUST force the epilogue's mem_desc_c
+    // alignment to 1 element. Otherwise mem_payload_t<unaligned_2d>
+    // picks mem_dtype = uint64_t (4 fp16/lane) and the OOB predicate
+    // guards at uint64 granularity, writing up to 3 fp16s past N on
+    // any N not multiple of 4 -- silent for M=1 (USM slack absorbs
+    // it) but corrupts row+1 for M>1. See tests/integration/gemm/
+    // unaligned_bf16/kernel_func.hpp for the canonical pattern.
+    using mem_desc_c_epilogue_t = std::conditional_t<kUnaligned,
+            gpu::xetla::mem_desc_t<data_type_c, mem_layout::row_major,
+                    mem_space::global, /*alignment=*/1>,
+            mem_desc_c_t>;
     using epilogue_t = gpu::xetla::group::epilogue_t<epilogue_policy_t,
-            tile_shape, mem_desc_c_t>;
+            tile_shape, mem_desc_c_epilogue_t>;
     using group_swizzle = gpu::xetla::kernel::group_swizzle_default<arch_tag>;
     using gemm_op_t = gpu::xetla::kernel::gemm_universal_t<
             gpu::xetla::kernel::dispatch_policy_int2_fp16_upcvt_kslicing<
