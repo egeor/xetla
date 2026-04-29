@@ -221,4 +221,59 @@ struct compute_policy_int2_fp16_upcvt_xmx<compute_attr_, perf_tuning_knob_,
     };
 };
 
+/// Compute policy for int1 weight-only-quant GEMM with fp16 activations and
+/// per-K-group fp16 scale (no zero-point). int1 codes are interpreted as
+/// {0 -> +1, 1 -> -1} so the dequantized fp16 weight is just `+/- scale` --
+/// upconvert reduces to a single XOR of the scale's sign bit with the code.
+template <typename compute_attr_, typename perf_tuning_knob_,
+        typename dtype_scale_, int dequant_s_, int mma_xmx_m_ = 0,
+        gpu_arch arch_tag_ = gpu_arch::Xe, bool use_unaligned_n_ = false>
+struct compute_policy_int1_fp16_upcvt_xmx {};
+
+template <typename compute_attr_, typename perf_tuning_knob_,
+        typename dtype_scale_, int dequant_s_, int mma_xmx_m_,
+        bool use_unaligned_n_>
+struct compute_policy_int1_fp16_upcvt_xmx<compute_attr_, perf_tuning_knob_,
+        dtype_scale_, dequant_s_, mma_xmx_m_, gpu_arch::Xe, use_unaligned_n_> {
+    using compute_attr = compute_attr_;
+    using perf_tuning_knob = perf_tuning_knob_;
+    static constexpr int k_stride = perf_tuning_knob::k_stride;
+    static constexpr int stages = perf_tuning_knob::stages;
+    static constexpr int sync_freq = perf_tuning_knob::sync_freq;
+    static constexpr gpu_arch arch_tag = gpu_arch::Xe;
+    static constexpr bool use_unaligned_n = use_unaligned_n_;
+    using dtype_mma_acc = typename compute_attr::dtype_acc; // float
+    using dtype_mma_a = typename compute_attr::dtype_a;     // fp16
+    using dtype_mma_b = typename compute_attr::dtype_b;     // fp16
+
+    static constexpr uint32_t block_bytes_x_a = 32;
+    static constexpr uint32_t block_size_y_a = 16;
+
+    static constexpr bool is_int1_fp16_upcvt_policy = true;
+    static constexpr bool is_int1_matB_policy = true;
+
+    static constexpr uint32_t block_size_x_b = 16;
+    static constexpr uint32_t block_bytes_y_b = 32;
+    static_assert(block_bytes_x_a == block_bytes_y_b,
+            "mat_a x need to match with mat_b y");
+
+    static constexpr uint32_t dequant_s = dequant_s_;
+    static_assert((dequant_s % (32 / sizeof(dtype_mma_b))) == 0,
+            "dequant_s should be a multiple of 32B (== 16 fp16 elements)");
+    using dtype_scale = dtype_scale_;
+
+    static constexpr uint32_t mma_xmx_m = static_cast<uint32_t>(mma_xmx_m_);
+    struct arch_attr {
+        template <msg_type message_type = msg_type::block_2d>
+        using load_store_attr = load_store_attr_t<message_type, gpu_arch::Xe>;
+
+        template <grf_mode grf_num_mode = grf_mode::double_grf>
+        using register_attr = register_attr_t<grf_num_mode, gpu_arch::Xe>;
+
+        using mma_attr = mma_attr_t<gpu_arch::Xe, mma_xmx_m>;
+
+        static constexpr uint32_t max_wg_num = 64;
+    };
+};
+
 } // namespace gpu::xetla::group

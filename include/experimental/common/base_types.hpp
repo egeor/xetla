@@ -90,4 +90,28 @@ struct native_type<int2x16> {
     using type = uint32_t;
 };
 
+/// @brief xetla 1bit data packed as 32bits data type.
+/// 32 1bit data pack to 4 bytes. Code 0 -> +1, Code 1 -> -1.
+struct int1x32 {
+    uint32_t data;
+
+    operator uint32_t() const { return data; }
+    int1x32(uint32_t val) { data = val; }
+};
+
+template <>
+struct get_packed_num<int1x32> {
+    static constexpr uint32_t value = 32;
+};
+
+template <>
+struct is_internal_type<int1x32> {
+    static constexpr bool value = true;
+};
+
+template <>
+struct native_type<int1x32> {
+    using type = uint32_t;
+};
+
 } // namespace gpu::xetla
