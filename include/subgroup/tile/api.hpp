@@ -127,13 +127,16 @@ __XETLA_API typename std::enable_if_t<std::is_same<std::remove_cv_t<typename T_d
     dst.reg += xetla_cvt<typename T_dst::dtype, interm_t, elems>(intermediate);
 }
 
-// Overload: scaleA is a tile of per-row scales and scaleB is a tile of per-column scales
+// Overload: scaleA is a tile of per-row scales and scaleB is a tile of per-column scales.
+// Accepts scaleA / scaleB tile dtypes of float OR fp16 (computation is promoted to float).
 template <typename T_dst, typename T_src, typename T_scaleA, typename T_scaleB>
-__XETLA_API typename std::enable_if_t<(std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, bf16>) && std::is_same<std::remove_cv_t<typename T_src::dtype>, int32_t>::value
-                && std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value && std::is_same<std::remove_cv_t<typename T_scaleB::dtype>, float>::value,
+__XETLA_API typename std::enable_if_t<(std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, bf16> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, fp16>) && std::is_same<std::remove_cv_t<typename T_src::dtype>, int32_t>::value
+                && (std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, fp16>)
+                && (std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, fp16>),
         void>
 elemwise_scale_output(T_dst &dst, T_src &src, const T_scaleA &scaleA, const T_scaleB &scaleB) {
     using interm_t = float;
+    using scaleB_dtype = std::remove_cv_t<typename T_scaleB::dtype>;
     constexpr uint32_t elems = T_src::tile_desc::tile_elems;
     constexpr uint32_t block_size_x = T_dst::tile_desc::block_size_x;
     constexpr uint32_t block_size_y = T_dst::tile_desc::block_size_y;
@@ -149,12 +152,19 @@ elemwise_scale_output(T_dst &dst, T_src &src, const T_scaleA &scaleA, const T_sc
         for (int j = 0; j < num_block_x; ++j) {
 #pragma unroll
             for (int ii = 0; ii < block_size_y; ++ii) {
-                auto scaleA_val = static_cast<interm_t>(1.0f/scaleA.reg[i * block_size_y + ii]);
+                auto scaleA_val = static_cast<interm_t>(1.0f/static_cast<interm_t>(scaleA.reg[i * block_size_y + ii]));
                 auto scaleA_vec = xetla_vector<interm_t, simd>(scaleA_val);
 #pragma unroll
                 for (int jj = 0; jj < block_size_x; jj += simd) {
-                    auto scaleB_vec = scaleB_reg.xetla_select<simd, 1>(j * block_size_x + jj).xetla_format<interm_t>();
-                    intermediate.xetla_select<simd, 1>((i * num_block_x + j) * block_elems + ii * block_size_x + jj) *= scaleB_vec * scaleA_vec;
+                    if constexpr (std::is_same_v<scaleB_dtype, float>) {
+                        auto scaleB_vec = scaleB_reg.xetla_select<simd, 1>(j * block_size_x + jj).xetla_format<interm_t>();
+                        intermediate.xetla_select<simd, 1>((i * num_block_x + j) * block_elems + ii * block_size_x + jj) *= scaleB_vec * scaleA_vec;
+                    } else {
+                        // fp16 scales: convert to float before multiplying.
+                        xetla_vector<scaleB_dtype, simd> scaleB_raw = scaleB_reg.xetla_select<simd, 1>(j * block_size_x + jj);
+                        xetla_vector<interm_t, simd> scaleB_vec = xetla_cvt<interm_t, scaleB_dtype, simd>(scaleB_raw);
+                        intermediate.xetla_select<simd, 1>((i * num_block_x + j) * block_elems + ii * block_size_x + jj) *= scaleB_vec * scaleA_vec;
+                    }
                 }
             }
         }
@@ -193,12 +203,13 @@ elemwise_scale_bf16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA
     }
 }
 
-// Convert fp16 tile to int8 tile using per-row reciprocal scales
+// Convert fp16 tile to int8 tile using per-row reciprocal scales.
+// Accepts scaleA tile dtype of float OR fp16 (computation is promoted to float).
 template <typename T_dst, typename T_src, typename T_scaleA>
 __XETLA_API typename std::enable_if_t<
         std::is_same<std::remove_cv_t<typename T_src::dtype>, fp16>::value &&
         std::is_same<std::remove_cv_t<typename T_dst::dtype>, int8_t>::value &&
-        std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value,
+        (std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, fp16>),
         void>
 elemwise_scale_fp16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA) {
     using interm_t = float;
