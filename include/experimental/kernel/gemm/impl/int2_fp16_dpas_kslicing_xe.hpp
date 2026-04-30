@@ -132,9 +132,13 @@ private:
 
     static constexpr bool use_external_scale_a = use_external_scale_a_;
     
-    // Scale A computation resources (only used when use_external_scale_a = false)
+    // Scale A computation resources (only used when use_external_scale_a = false).
+    // The SLM scratchpad stores one element per (row, scale-group) pair using
+    // the templated dtype_scale_a so that the GEMM can read the scales back
+    // through the same dtype (e.g. fp16 for the fp16-scales variant).  The
+    // "* 128" budget is the maximum supported scale_gs.
     static constexpr uint32_t scale_a_nbarr_count = use_external_scale_a ? 0 : 1;
-    static constexpr uint32_t scale_a_slm_size = use_external_scale_a ? 0 : (wg_tile_m * sizeof(float) * 128);
+    static constexpr uint32_t scale_a_slm_size = use_external_scale_a ? 0 : (wg_tile_m * sizeof(dtype_scale_a) * 128);
 
     static constexpr uint32_t counter_size = 8;
 
@@ -458,8 +462,24 @@ private:
                 }
                 // Reduce vector to single maximum value
                 float max_abs_val = xetla_reduce<float, float, tile_width, reduce_op::max>(acc_vec);
-                // Store to SLM using proper XETLA SLM store
-                xetla_store_local<float, 1>(scale_slm_base + (row_idx + igs * rows_in_tile) * sizeof(float), 127.0f / max_abs_val);
+                // Store to SLM in the templated dtype_scale_a (e.g. float for
+                // the fp32-scales variant, fp16 for the fp16-scales variant).
+                // The byte offset is scaled by sizeof(dtype_scale_a) so that
+                // the SLM mem_desc the GEMM uses to read the scales (which is
+                // element-strided in dtype_scale_a) sees the values at the
+                // expected positions.
+                //
+                // We use the vector (N=1, NElts=1) gather-style scatter
+                // instead of the scalar block-store form.  oneAPI 2025.3 does
+                // not declare slm_block_store<half, 1, ...> SYCL_EXTERNAL, so
+                // the scalar form fails to link in fp16 device kernels; the
+                // vector form lowers to lsc_slm_scatter, which IS
+                // SYCL_EXTERNAL for half.
+                dtype_scale_a scale_val = static_cast<dtype_scale_a>(127.0f / max_abs_val);
+                xetla_vector<uint32_t, 1> scatter_offsets(scale_slm_base + (row_idx + igs * rows_in_tile) * sizeof(dtype_scale_a));
+                xetla_vector<dtype_scale_a, 1> scatter_vals(scale_val);
+                xetla_mask<1> scatter_pred(1);
+                xetla_store_local<dtype_scale_a, 1, data_size::default_size, 1>(scatter_offsets, scatter_vals, scatter_pred);
             }
         }
 

@@ -92,20 +92,33 @@ public:
 };
 
 // Dispatch function with external_scale_a_calc support - inline template to avoid multiple definitions.
-// In this fp16-scales test, the runtime rejects --external_scale_a_calc=0 at startup
-// (kslicing's SLM scale_a path is hardcoded to float), so only the UseExternalScaleA=true
-// branch is generated. Calling this with g_external_scale_a_calc==0 is a programmer error.
+// Both UseExternalScaleA={true,false} branches are now generated; the SLM
+// scale_a path in the kslicing kernel was templated on dtype_scale_a so it
+// also works for the fp16-scales variant.
 template <typename TestBase, uint32_t GKS, uint32_t WgM, uint32_t SgM, uint32_t WgN, uint32_t SgN, uint32_t SgK, uint32_t XMXM, typename AccType, typename CType>
 inline void dispatch_gemm_with_scale_mode(int iter, int n_sets, bool enable_validation) {
-    using Test = int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>;
-    if (g_enable_bias && g_enable_silu) {
-        int2_dequantize_gemm_run<Test, true, true>(iter, n_sets, enable_validation);
-    } else if (g_enable_bias) {
-        int2_dequantize_gemm_run<Test, true, false>(iter, n_sets, enable_validation);
-    } else if (g_enable_silu) {
-        int2_dequantize_gemm_run<Test, false, true>(iter, n_sets, enable_validation);
+    if (g_external_scale_a_calc) {
+        using Test = int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>;
+        if (g_enable_bias && g_enable_silu) {
+            int2_dequantize_gemm_run<Test, true, true>(iter, n_sets, enable_validation);
+        } else if (g_enable_bias) {
+            int2_dequantize_gemm_run<Test, true, false>(iter, n_sets, enable_validation);
+        } else if (g_enable_silu) {
+            int2_dequantize_gemm_run<Test, false, true>(iter, n_sets, enable_validation);
+        } else {
+            int2_dequantize_gemm_run<Test, false, false>(iter, n_sets, enable_validation);
+        }
     } else {
-        int2_dequantize_gemm_run<Test, false, false>(iter, n_sets, enable_validation);
+        using Test = int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, false>;
+        if (g_enable_bias && g_enable_silu) {
+            int2_dequantize_gemm_run<Test, true, true>(iter, n_sets, enable_validation);
+        } else if (g_enable_bias) {
+            int2_dequantize_gemm_run<Test, true, false>(iter, n_sets, enable_validation);
+        } else if (g_enable_silu) {
+            int2_dequantize_gemm_run<Test, false, true>(iter, n_sets, enable_validation);
+        } else {
+            int2_dequantize_gemm_run<Test, false, false>(iter, n_sets, enable_validation);
+        }
     }
 }
 
@@ -159,12 +172,31 @@ constexpr std::array<gemm_tuple_t, 7> PRE_GEMM_TUPLES = {{
     {  64u, 8u, 256u, 128u,  64u },
 }};
 
-constexpr std::array<gemm_tuple_t, 0> PRE_GEMV_TUPLES = {{
-    // GEMV tuples are NOT precompiled in this fp16-scales test: a 1-element
-    // fp16 block_load specialization needed by the sg_m=1 path is not declared
-    // SYCL_EXTERNAL in oneAPI 2025.3 ESIMD memory.hpp, which causes the SYCL
-    // device compilation to fail. Use int2_fp16_dpas_fast_test for fp16-activation
-    // GEMV (it stores scales as float, avoiding the missing fp16 specialization).
+// Precompiled GEMV variants: Cartesian product of wg_n in {64, 128, 256},
+// sg_n in {16, 32}, and sg_k in {32, 64, 128}, all with wg_m=1, sg_m=1.
+// (mma_xmx_m is forced to 1 for the GEMV path in precompiled_gemm.cpp.)
+constexpr std::array<gemm_tuple_t, 18> PRE_GEMV_TUPLES = {{
+    // wg_n=64
+    { 1u, 1u,  64u, 16u,  32u },
+    { 1u, 1u,  64u, 16u,  64u },
+    { 1u, 1u,  64u, 16u, 128u },
+    { 1u, 1u,  64u, 32u,  32u },
+    { 1u, 1u,  64u, 32u,  64u },
+    { 1u, 1u,  64u, 32u, 128u },
+    // wg_n=128
+    { 1u, 1u, 128u, 16u,  32u },
+    { 1u, 1u, 128u, 16u,  64u },
+    { 1u, 1u, 128u, 16u, 128u },
+    { 1u, 1u, 128u, 32u,  32u },
+    { 1u, 1u, 128u, 32u,  64u },
+    { 1u, 1u, 128u, 32u, 128u },
+    // wg_n=256
+    { 1u, 1u, 256u, 16u,  32u },
+    { 1u, 1u, 256u, 16u,  64u },
+    { 1u, 1u, 256u, 16u, 128u },
+    { 1u, 1u, 256u, 32u,  32u },
+    { 1u, 1u, 256u, 32u,  64u },
+    { 1u, 1u, 256u, 32u, 128u },
 }};
 
 // Forward declaration for get_precompiled_variants() function (defined in variant_registry.cpp)

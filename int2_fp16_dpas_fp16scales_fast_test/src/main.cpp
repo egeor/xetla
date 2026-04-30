@@ -1069,18 +1069,11 @@ int main(int argc, char **argv) {
                 std::cout << "Error: external_scale_a_calc must be 0 or 1. Got: " << g_external_scale_a_calc << "\n";
                 return 1;
             }
-            if (g_external_scale_a_calc == 0) {
-                // The kslicing kernel's internal SLM path computes and stores
-                // scale_a as float in shared local memory (see scale_a_slm_size
-                // in include/experimental/kernel/gemm/impl/int2_fp16_dpas_kslicing_xe.hpp).
-                // That hardcoded float layout is incompatible with this test's
-                // fp16 scale_a dtype (the GEMM would read fp16 elements from a
-                // float-sized SLM scratchpad, producing NaN outputs). Only the
-                // external (separate kernel) scale-A path is supported here.
-                std::cout << "Error: --external_scale_a_calc=0 (internal SLM mode) is not supported "
-                          << "in the fp16-scales variant. Use --external_scale_a_calc=1 (default).\n";
-                return 1;
-            }
+            // Both modes are now supported in the fp16-scales variant: the
+            // kslicing kernel's internal SLM scale_a path was templated on
+            // dtype_scale_a so it stores fp16 (not float) when the scale
+            // dtype is fp16.  See compute_scale_a_to_slm in
+            // include/experimental/kernel/gemm/impl/int2_fp16_dpas_kslicing_xe.hpp.
             std::cout << "Scale A calculation mode set to: " << (g_external_scale_a_calc ? "external (separate kernel)" : "internal (SLM within GEMM)") << "\n";
             for (int j = i; j < argc - 1; j++) argv[j] = argv[j + 1]; argc--; i--; continue;
         }
@@ -1228,20 +1221,25 @@ static void print_precompile_plan() {
 
 
 // Explicit template instantiations for precompiled variants.
-// In this fp16-scales test the runtime rejects --external_scale_a_calc=0 because
-// the kslicing kernel's SLM scale_a path is hardcoded to float; on top of that,
-// some 1-element fp16 SLM block_load specializations are not SYCL_EXTERNAL in
-// this oneAPI build. So only the UseExternalScaleA=true mode is instantiated.
+// Both UseExternalScaleA={true,false} branches are instantiated: the
+// kslicing kernel's SLM scale_a path was templated on dtype_scale_a so it
+// stores fp16 (not float) when the scale dtype is fp16, which makes the
+// internal-SLM mode (--external_scale_a_calc=0) functional for this variant.
+#define INSTANTIATE_ALL_POSTOPS_ESA(GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, ESA) \
+    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, ESA>, false, false>(int, int, bool); \
+    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, ESA>, true, false>(int, int, bool); \
+    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, ESA>, false, true>(int, int, bool); \
+    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, ESA>, true, true>(int, int, bool);
+
 #define INSTANTIATE_ALL_POSTOPS(GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType) \
-    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>, false, false>(int, int, bool); \
-    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>, true, false>(int, int, bool); \
-    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>, false, true>(int, int, bool); \
-    template void int2_dequantize_gemm_run<int2_dequant_base<GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true>, true, true>(int, int, bool);
+    INSTANTIATE_ALL_POSTOPS_ESA(GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, true)  \
+    INSTANTIATE_ALL_POSTOPS_ESA(GKS, WgM, SgM, WgN, SgN, SgK, XMXM, AccType, CType, false)
 
 INSTANTIATE_ALL_POSTOPS(1u, 64u, 8u, 256u, 128u, 128u, 8u, int32_t, fp16)
 
 // Additional precompiled tile tuples (matching variant_common.hpp PRE_GEMM_TUPLES / PRE_GEMV_TUPLES).
-// Each line expands to 8 explicit instantiations (UseExternalScaleA={true,false} x 4 post-op combos).
+// Each line expands to 16 explicit instantiations
+// (UseExternalScaleA={true,false} x 4 post-op combos x ... etc).
 
 // GEMM tuples (sg_m=8, mma_xmx_m=8, GKS=1)
 INSTANTIATE_ALL_POSTOPS(1u,  64u, 8u, 128u, 128u,  32u, 8u, int32_t, fp16)
@@ -1251,21 +1249,30 @@ INSTANTIATE_ALL_POSTOPS(1u,  32u, 8u, 160u, 160u,  32u, 8u, int32_t, fp16)
 INSTANTIATE_ALL_POSTOPS(1u,  64u, 8u, 160u, 160u,  32u, 8u, int32_t, fp16)
 INSTANTIATE_ALL_POSTOPS(1u,  64u, 8u, 256u, 128u,  64u, 8u, int32_t, fp16)
 
-// GEMV tuples (wg_m=1, sg_m=1, mma_xmx_m=1, GKS=1)
-//
-// NOT INSTANTIATED in this fp16-scales test: the GEMV path needs a 1-element
-// fp16 block_load specialization (sg_m=1 -> per-subgroup 1-element scale_a load)
-// which is not declared SYCL_EXTERNAL in oneAPI 2025.3 ESIMD memory.hpp. The
-// resulting "SYCL kernel cannot call an undefined function without
-// SYCL_EXTERNAL attribute" error blocks compilation. For GEMV with fp16
-// activations + fp16 scales, use the existing int2_fp16_dpas_fast_test (which
-// stores scales as float and so triggers the fp32 1-element block_load that
-// this oneAPI build does support). The seven GEMV tile tuples the user
-// requested are therefore *not* instantiated here:
-//   (wg_n=128, sg_n=16, sg_k=128)
-//   (wg_n= 32, sg_n=16, sg_k=256)
-//   (wg_n=128, sg_n=32, sg_k=128)
-//   (wg_n=128, sg_n=32, sg_k=256)
-//   (wg_n= 32, sg_n=16, sg_k=160)
-//   (wg_n=128, sg_n=16, sg_k=160)
-//   (wg_n= 32, sg_n=32, sg_k=256)
+// GEMV tuples (wg_m=1, sg_m=1, mma_xmx_m=1, GKS=1).
+// Cartesian product of wg_n in {64, 128, 256}, sg_n in {16, 32}, sg_k in
+// {32, 64, 128} (18 shapes total).  The kernel bypasses the standard
+// tile_load for the 1-element fp16 scaleA case (global path) with a
+// single-lane lsc_gather (SYCL_EXTERNAL) instead of the missing fp16
+// 1-element block_load_impl specialization in oneAPI 2025.3.
+// wg_n=64
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 16u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 16u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 16u, 128u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 32u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 32u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u,  64u, 32u, 128u, 1u, int32_t, fp16)
+// wg_n=128
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 16u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 16u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 16u, 128u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 32u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 32u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 128u, 32u, 128u, 1u, int32_t, fp16)
+// wg_n=256
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 16u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 16u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 16u, 128u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 32u,  32u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 32u,  64u, 1u, int32_t, fp16)
+INSTANTIATE_ALL_POSTOPS(1u, 1u, 1u, 256u, 32u, 128u, 1u, int32_t, fp16)

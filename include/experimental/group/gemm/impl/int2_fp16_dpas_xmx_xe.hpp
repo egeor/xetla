@@ -518,8 +518,51 @@ public:
         matAcc_local_f32.init(0);
         for (int igk = 0; igk < k_groups; igk++) {
             matAcc_local.init(0);
-            // Load scales A and B
-            subgroup::tile_load<cache_hint::cached, cache_hint::cached>(scaleA_tile, scaleA_payload);
+            // Load scales A and B.
+            //
+            // For the 1-element fp16 scaleA case (sg_tile_m == 1, GEMV) the
+            // standard subgroup::tile_load lowers into ESIMD's
+            // __ESIMD_DNS::block_load_impl<half, 1, ...>, which is NOT
+            // declared SYCL_EXTERNAL in oneAPI 2025.3 ESIMD memory.hpp and
+            // breaks SYCL device linking. Bypass tile_load in that exact
+            // case with a single-lane gather (lsc_gather<half, 1, ..., 1>),
+            // which IS SYCL_EXTERNAL. The block_1d payload still tracks the
+            // pointer / offset / pitch via update_tdesc so the iteration
+            // bookkeeping below is unchanged. All other shapes / dtypes
+            // continue through tile_load unmodified.
+            //
+            // The same problem occurs for SLM-resident fp16 scaleA (GEMV +
+            // --external_scale_a_calc=0): slm_block_load<half, 1, ...> is
+            // also NOT SYCL_EXTERNAL in oneAPI 2025.3.  We bypass that with
+            // a single-lane lsc_slm_gather (xetla_load_local with N=1
+            // channels), which IS SYCL_EXTERNAL.
+            if constexpr (std::is_same_v<std::remove_cv_t<dtype_scale_a>, fp16>
+                          && (scale_a_tile_m == 1)
+                          && (scale_a_mem_space == mem_space::global)) {
+                fp16 *scale_a_ptr = reinterpret_cast<fp16 *>(
+                        reinterpret_cast<uint8_t *>(scaleA_payload.base_ptr)
+                        + scaleA_payload.base_offset);
+                xetla_vector<uint32_t, 1> gather_offsets(0);
+                xetla_mask<1> gather_pred(1);
+                xetla_vector<fp16, 1> v = xetla_load_global<fp16, 1,
+                        data_size::default_size, cache_hint::cached,
+                        cache_hint::cached, 1>(
+                        scale_a_ptr, gather_offsets, gather_pred);
+                scaleA_tile.reg[0] = v[0];
+            } else if constexpr (std::is_same_v<std::remove_cv_t<dtype_scale_a>, fp16>
+                                 && (scale_a_tile_m == 1)
+                                 && (scale_a_mem_space == mem_space::local)) {
+                // The SLM block_1d payload tracks the byte address directly
+                // (`address` already includes pitch * offset_y + offset_x *
+                // sizeof(dtype)), so we just hand it to the gather form.
+                xetla_vector<uint32_t, 1> slm_offsets(scaleA_payload.address);
+                xetla_mask<1> slm_pred(1);
+                xetla_vector<fp16, 1> v = xetla_load_local<fp16, 1,
+                        data_size::default_size, 1>(slm_offsets, slm_pred);
+                scaleA_tile.reg[0] = v[0];
+            } else {
+                subgroup::tile_load<cache_hint::cached, cache_hint::cached>(scaleA_tile, scaleA_payload);
+            }
             scaleA_payload.template update_tdesc<tdesc_update_dir::y_dir>(1);
 
             // Prefetch next scale only for global memory (not SLM)

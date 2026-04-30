@@ -4,9 +4,11 @@
 * Licensed under the Apache License, Version 2.0 (the "License");
 *******************************************************************************/
 
-// Explicit-list registration of all 14 precompiled tile tuples (7 GEMM + 7 GEMV).
+// Explicit-list registration of all precompiled tile tuples (GEMM + GEMV).
 // Each entry calls run_wrapper<GKS, wg_m, sg_m, wg_n, sg_n, sg_k, mma_xmx_m, AccType, CType>().
 // For GEMM: mma_xmx_m == sg_m. For GEMV: mma_xmx_m == 1 (sg_m).
+// See PRE_GEMM_TUPLES / PRE_GEMV_TUPLES in variant_common.hpp for the
+// authoritative shape lists.
 
 #include "variant_common.hpp"
 
