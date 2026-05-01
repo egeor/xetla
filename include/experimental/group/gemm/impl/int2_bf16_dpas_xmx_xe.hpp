@@ -519,7 +519,35 @@ public:
         for (int igk = 0; igk < k_groups; igk++) {
             matAcc_local.init(0);
             // Load scales A and B
-            subgroup::tile_load<cache_hint::cached, cache_hint::cached>(scaleA_tile, scaleA_payload);
+            // Workaround for oneAPI 2025.3 ESIMD: 1-element bf16 block_load /
+            // slm_block_load is not SYCL_EXTERNAL and fails the
+            // SmallIntFactor32Bit static_assert. Bypass tile_load with a
+            // single-lane lsc_gather / lsc_slm_gather, which IS SYCL_EXTERNAL.
+            // Mirrors the equivalent fp16 workaround in int2_fp16_dpas_xmx_xe.hpp.
+            if constexpr (std::is_same_v<std::remove_cv_t<dtype_scale_a>, bf16>
+                          && (scale_a_tile_m == 1)
+                          && (scale_a_mem_space == mem_space::global)) {
+                bf16 *scale_a_ptr = reinterpret_cast<bf16 *>(
+                        reinterpret_cast<uint8_t *>(scaleA_payload.base_ptr)
+                        + scaleA_payload.base_offset);
+                xetla_vector<uint32_t, 1> gather_offsets(0);
+                xetla_mask<1> gather_pred(1);
+                xetla_vector<bf16, 1> v = xetla_load_global<bf16, 1,
+                        data_size::default_size, cache_hint::cached,
+                        cache_hint::cached, 1>(
+                        scale_a_ptr, gather_offsets, gather_pred);
+                scaleA_tile.reg[0] = v[0];
+            } else if constexpr (std::is_same_v<std::remove_cv_t<dtype_scale_a>, bf16>
+                                 && (scale_a_tile_m == 1)
+                                 && (scale_a_mem_space == mem_space::local)) {
+                xetla_vector<uint32_t, 1> slm_offsets(scaleA_payload.address);
+                xetla_mask<1> slm_pred(1);
+                xetla_vector<bf16, 1> v = xetla_load_local<bf16, 1,
+                        data_size::default_size, 1>(slm_offsets, slm_pred);
+                scaleA_tile.reg[0] = v[0];
+            } else {
+                subgroup::tile_load<cache_hint::cached, cache_hint::cached>(scaleA_tile, scaleA_payload);
+            }
             scaleA_payload.template update_tdesc<tdesc_update_dir::y_dir>(1);
 
             // Prefetch next scale only for global memory (not SLM)
