@@ -128,11 +128,11 @@ __XETLA_API typename std::enable_if_t<std::is_same<std::remove_cv_t<typename T_d
 }
 
 // Overload: scaleA is a tile of per-row scales and scaleB is a tile of per-column scales.
-// Accepts scaleA / scaleB tile dtypes of float OR fp16 (computation is promoted to float).
+// Accepts scaleA / scaleB tile dtypes of float, bf16 OR fp16 (computation is promoted to float).
 template <typename T_dst, typename T_src, typename T_scaleA, typename T_scaleB>
 __XETLA_API typename std::enable_if_t<(std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, bf16> || std::is_same_v<std::remove_cv_t<typename T_dst::dtype>, fp16>) && std::is_same<std::remove_cv_t<typename T_src::dtype>, int32_t>::value
-                && (std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, fp16>)
-                && (std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, fp16>),
+                && (std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, bf16> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, fp16>)
+                && (std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, bf16> || std::is_same_v<std::remove_cv_t<typename T_scaleB::dtype>, fp16>),
         void>
 elemwise_scale_output(T_dst &dst, T_src &src, const T_scaleA &scaleA, const T_scaleB &scaleB) {
     using interm_t = float;
@@ -172,12 +172,13 @@ elemwise_scale_output(T_dst &dst, T_src &src, const T_scaleA &scaleA, const T_sc
     dst.reg += xetla_cvt<typename T_dst::dtype, interm_t, elems>(intermediate);
 }
 
-// Convert bf16 tile to int8 tile using per-row reciprocal scales
+// Convert bf16 tile to int8 tile using per-row reciprocal scales.
+// Accepts scaleA tile dtype of float OR bf16 (computation is promoted to float).
 template <typename T_dst, typename T_src, typename T_scaleA>
 __XETLA_API typename std::enable_if_t<
         std::is_same<std::remove_cv_t<typename T_src::dtype>, bf16>::value &&
         std::is_same<std::remove_cv_t<typename T_dst::dtype>, int8_t>::value &&
-        std::is_same<std::remove_cv_t<typename T_scaleA::dtype>, float>::value,
+        (std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, float> || std::is_same_v<std::remove_cv_t<typename T_scaleA::dtype>, bf16>),
         void>
 elemwise_scale_bf16_to_int8(T_dst &dst, const T_src &src, const T_scaleA &scaleA) {
     using interm_t = float;
