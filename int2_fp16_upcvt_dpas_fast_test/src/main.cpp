@@ -79,6 +79,14 @@ struct RunConfig {
     // A/B/ScaleB inputs (and is validated against its own gold reference).
     // Default false: one host init is broadcast to all sets.
     bool distinct_sets = false;
+    // Tile-config override for autotuning: 0 means "use the built-in N-based
+    // dispatch". When all three are set the driver runs exactly that
+    // (wg_n, global_kslicing, local_kslicing) combination, so the sweep
+    // harness can rank tile shapes for a new model's GEMV shapes using the
+    // same multi-buffer-set (DRAM-honest) methodology as a normal run.
+    int wgn = 0;
+    int ks  = 0;
+    int ls  = 0;
 };
 
 // SYCL kernel name tags (avoid mangled-name collisions; one per shape variant).
@@ -613,6 +621,34 @@ void run_gemm_impl(const RunConfig &cfg) {
     }
 }
 
+// Explicit (wg_n, KS, LS) dispatch used by the autotuning sweep. Only the
+// aligned specialization is instantiated here (sweeps target N % 4 == 0
+// shapes); returns false when the combination was not compiled in.
+template <int WGN>
+bool run_gemm_explicit_wgn(const RunConfig &cfg) {
+#define XETLA_TRY(KS_, LS_)                                                   \
+    if (cfg.ks == (KS_) && cfg.ls == (LS_)) {                                 \
+        run_gemm_impl_inner</*WGM*/ 1, WGN, /*SGM*/ 1, /*SGN*/ 16,            \
+                /*SGK*/ 128, KS_, LS_, /*kUnaligned=*/false>(cfg);            \
+        return true;                                                          \
+    }
+    XETLA_TRY(1, 1) XETLA_TRY(1, 2) XETLA_TRY(1, 4) XETLA_TRY(1, 8)
+    XETLA_TRY(2, 1) XETLA_TRY(2, 2) XETLA_TRY(2, 4)
+    XETLA_TRY(4, 1) XETLA_TRY(4, 2) XETLA_TRY(4, 4)
+#undef XETLA_TRY
+    return false;
+}
+
+bool run_gemm_explicit(const RunConfig &cfg) {
+    switch (cfg.wgn) {
+        case 32:  return run_gemm_explicit_wgn<32>(cfg);
+        case 64:  return run_gemm_explicit_wgn<64>(cfg);
+        case 128: return run_gemm_explicit_wgn<128>(cfg);
+        case 256: return run_gemm_explicit_wgn<256>(cfg);
+        default:  return false;
+    }
+}
+
 // Run with the default tile config: wg_m=1, sg_m=1, sg_n=16, sg_k=128.
 // (mma_xmx_m == sg_m == 1 makes XMX accept tile_size_m == 1.)
 //
@@ -632,6 +668,13 @@ void run_gemm_impl(const RunConfig &cfg) {
 //   N=16384 : 322 GB/s (wg_n=128, KS=2)
 //   N=32768 : 362 GB/s (wg_n=128, KS=1)
 void run_gemm(const RunConfig &cfg) {
+    // Autotuning override: run exactly the requested tile config.
+    if (cfg.wgn && cfg.ks && cfg.ls) {
+        if (run_gemm_explicit(cfg)) return;
+        std::cout << "Tile config wg_n=" << cfg.wgn << " KS=" << cfg.ks
+                  << " LS=" << cfg.ls << " is not instantiated\n";
+        return;
+    }
     // For M=1, dispatch to one of three GEMV-tuned tiers based on N. For
     // M>1 the wider wg_n=128 is a small but consistent win.
     const bool gemv_tiny_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
@@ -712,6 +755,9 @@ int main(int argc, char **argv) {
         else if (a == "--k" && i + 1 < argc) parse_int("--k", argv[++i], cfg.matrix_k);
         else if (a == "--iters" && i + 1 < argc) parse_int("--iters", argv[++i], cfg.iters);
         else if (a == "--no-validate") cfg.validate = false;
+        else if (a == "--wgn" && i + 1 < argc) parse_int("--wgn", argv[++i], cfg.wgn);
+        else if (a == "--ks" && i + 1 < argc) parse_int("--ks", argv[++i], cfg.ks);
+        else if (a == "--ls" && i + 1 < argc) parse_int("--ls", argv[++i], cfg.ls);
         else if (a == "--distinct-sets") cfg.distinct_sets = true;
         else if (a == "--sets" && i + 1 < argc)
             parse_int("--sets", argv[++i], cfg.num_sets);
