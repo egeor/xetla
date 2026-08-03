@@ -88,12 +88,20 @@ private:
     using dtype_mma_b = typename compute_policy::dtype_mma_b;
     using dtype_scale = typename compute_policy::dtype_scale;
 
+    // The int2 -> float upconvert below is pure uint16 bit work: a magnitude
+    // mask and a 0x8000 sign flip. fp16 and bf16 share that layout, so the
+    // same code dequantizes either one; only the MMA type differs.
+    static constexpr bool is_fp16_mma = std::is_same<remove_const_t<dtype_mma_a>,
+            remove_const_t<fp16>>::value;
+    static constexpr bool is_bf16_mma = std::is_same<remove_const_t<dtype_mma_a>,
+            remove_const_t<bf16>>::value;
+    static_assert(is_fp16_mma || is_bf16_mma,
+            "dtype_mma_a must be fp16 or bf16 for int2 upcvt");
     static_assert(std::is_same<remove_const_t<dtype_mma_a>,
-                          remove_const_t<fp16>>::value,
-            "dtype_mma_a must be fp16 for int2_fp16_upcvt");
-    static_assert(std::is_same<remove_const_t<dtype_mma_b>,
-                          remove_const_t<fp16>>::value,
-            "dtype_mma_b must be fp16 for int2_fp16_upcvt");
+                          remove_const_t<dtype_mma_b>>::value,
+            "dtype_mma_a and dtype_mma_b must be the same type");
+    static_assert(sizeof(dtype_scale) == 2,
+            "scale must be a 16-bit float type (fp16 or bf16)");
 
     /******** set memory attribute **********/
     static constexpr mem_space mem_space_a = mem_desc_a_t::space;
