@@ -90,6 +90,18 @@ struct dispatch_policy_int1_fp16_upcvt_kslicing {
     static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
 };
 
+/// @brief BITCOS ternary weight kslicing GEMM, fp16 activations + fp16 scale
+/// per K-group. matB is one buffer holding a presence bitmap, per-column sign
+/// offsets and a compacted sign bitstream.
+template <typename group_swizzle_policy_, int num_global_kslicing_ = 1,
+        int num_local_kslicing_ = 1>
+struct dispatch_policy_bitcos_fp16_upcvt_kslicing {
+    using group_swizzle_policy = group_swizzle_policy_;
+    static constexpr int num_global_kslicing = num_global_kslicing_;
+    static constexpr int num_local_kslicing = num_local_kslicing_;
+    static constexpr gpu_arch arch_tag = group_swizzle_policy::arch_tag;
+};
+
 /// @} xetla_gemm
 
 } // namespace gpu::xetla::kernel

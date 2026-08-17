@@ -25,4 +25,5 @@
 #include "experimental/kernel/gemm/impl/int2_bf16_dpas_kslicing_xe.hpp"
 #include "experimental/kernel/gemm/impl/int2_fp16_dpas_kslicing_xe.hpp"
 #include "experimental/kernel/gemm/impl/int1_fp16_upcvt_kslicing_xe.hpp"
+#include "experimental/kernel/gemm/impl/bitcos_fp16_upcvt_kslicing_xe.hpp"
 #include "experimental/kernel/gemm/impl/int2_fp16_upcvt_kslicing_xe.hpp"
