@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <vector>
@@ -93,6 +94,29 @@ inline Sizes pack(const int8_t *codes, size_t k, size_t n,
     }
 
     return Sizes{bmp_words, n, sign_words, out.size()};
+}
+
+/// Prefix sign ranks for K-sliced execution. Row s-1 stores the number of
+/// nonzeros before slice s; slice zero always starts at rank zero.
+inline void pack_slice_ranks(const int8_t *codes, size_t k, size_t n,
+        uint32_t slices, std::vector<uint32_t> &out) {
+    if (slices <= 1) {
+        out.clear();
+        return;
+    }
+    const size_t slice_k = (k + slices - 1) / slices;
+    std::vector<uint32_t> rank(n, 0);
+    out.assign(static_cast<size_t>(slices - 1) * n, 0);
+    uint32_t next_slice = 1;
+    for (size_t kk = 0; kk < k; ++kk) {
+        while (next_slice < slices && kk == next_slice * slice_k) {
+            std::copy(rank.begin(), rank.end(),
+                    out.begin() + static_cast<size_t>(next_slice - 1) * n);
+            ++next_slice;
+        }
+        for (size_t nn = 0; nn < n; ++nn)
+            rank[nn] += codes[kk * n + nn] != 0;
+    }
 }
 
 /// Host mirror of the kernel unpack: rebuild the dense ternary matrix.

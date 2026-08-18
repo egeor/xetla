@@ -186,7 +186,11 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
     constexpr int sg_tile_m = SGM;
     constexpr int sg_tile_n = SGN;
     constexpr int sg_tile_k = SGK;
-    constexpr uint32_t prefetch_distance       = 0;
+#ifdef BITCOS_PREFETCH_DISTANCE
+        constexpr uint32_t prefetch_distance       = BITCOS_PREFETCH_DISTANCE;
+#else
+        constexpr uint32_t prefetch_distance       = 0;
+#endif
     constexpr uint32_t periodic_sync_interval  = 0;
     constexpr uint32_t global_kslicing         = KS;
     constexpr uint32_t local_kslicing          = LS;
@@ -306,9 +310,16 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
     const size_t size_b_words = bitcos_buf.size();
     const size_t bitcos_offsets_off = bitcos::offsets_word_base(K, N);
     const size_t bitcos_signs_off = bitcos::signs_word_base(K, N);
+                std::vector<uint32_t> slice_ranks;
+                bitcos::pack_slice_ranks(codes.data(), K, N, local_kslicing, slice_ranks);
+                const size_t size_slice_ranks = slice_ranks.size();
+                const double slice_rank_bits_per_weight
+                                                = static_cast<double>(size_slice_ranks) * 32.0
+                                                / static_cast<double>(K) / N;
     std::cout << "BITCOS: z=" << cfg.zero_frac << "  bits/weight="
               << bitcos::bits_per_weight(bitcos_sizes, K, N)
-              << "  (int2 reference 2.000)\n";
+                                                        << "  slice-rank overhead=" << slice_rank_bits_per_weight
+                                                        << "  (int2 reference 2.000)\n";
     // Device matC uses padded LD; host C/gold stay at logical M*N.
     const size_t size_c        = static_cast<size_t>(M) * ldc_padded;
     const size_t size_c_host   = static_cast<size_t>(M) * N;
@@ -326,8 +337,10 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
             * sizeof(data_type_c);
     const double bytes_scaleb_d = static_cast<double>(size_scale_b)
             * sizeof(data_type_scale);
+    const double bytes_ranks_d = static_cast<double>(size_slice_ranks)
+            * sizeof(uint32_t);
     const double bytes_per_set  = bytes_a_d + bytes_b_d + bytes_c_d
-            + bytes_scaleb_d;
+            + bytes_scaleb_d + bytes_ranks_d;
     int num_sets = cfg.num_sets;
     if (num_sets <= 0) {
         const double target_bytes = cfg.min_footprint_gb * 1e9;
@@ -399,6 +412,7 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
     std::vector<data_type_b *>     B_d_set(num_sets);
     std::vector<data_type_c *>     C_d_set(num_sets);
     std::vector<data_type_scale *> ScaleB_d_set(num_sets);
+        std::vector<uint32_t *> SliceRanks_d_set(num_sets, nullptr);
     for (int s = 0; s < num_sets; ++s) {
         A_d_set[s] = static_cast<data_type_a *>(aligned_alloc_device(
                 DEVICE_MEM_ALIGNMENT, size_a * sizeof(data_type_a),
@@ -413,8 +427,13 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
                 aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
                         size_scale_b * sizeof(data_type_scale),
                         device, context));
+        if (size_slice_ranks)
+            SliceRanks_d_set[s] = static_cast<uint32_t *>(aligned_alloc_device(
+                    DEVICE_MEM_ALIGNMENT, size_slice_ranks * sizeof(uint32_t),
+                    device, context));
         if (!A_d_set[s] || !B_d_set[s] || !C_d_set[s]
-                || !ScaleB_d_set[s]) {
+                || !ScaleB_d_set[s]
+                || (size_slice_ranks && !SliceRanks_d_set[s])) {
             std::cerr << "Device alloc failed at set " << s
                       << " (footprint " << total_footprint_gb
                       << " GB).\n";
@@ -439,6 +458,9 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
                 size_b_words * sizeof(data_type_b)).wait();
         queue.memcpy(ScaleB_d_set[s], ScaleB_h,
                 size_scale_b * sizeof(data_type_scale)).wait();
+        if (size_slice_ranks)
+            queue.memcpy(SliceRanks_d_set[s], slice_ranks.data(),
+                    size_slice_ranks * sizeof(uint32_t)).wait();
         queue.memset(C_d_set[s], 0,
                 size_c * sizeof(data_type_c)).wait();
     }
@@ -463,7 +485,7 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
             B_d_set[0], ldb, C_d_set[0], ldc, ScaleB_d_set[0], ld_scale_b,
             reinterpret_cast<uint32_t *>(B_d_set[0]) + bitcos_signs_off,
             reinterpret_cast<uint32_t *>(B_d_set[0]) + bitcos_offsets_off,
-            Acc_d, Cnt_d);
+            SliceRanks_d_set[0], Acc_d, Cnt_d);
 
     if (!gemm_op_t::can_implement(gemm_arg)) {
         std::cerr << "Arguments not supported by gemm_op_t::can_implement.\n";
@@ -497,7 +519,7 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
                 ld_scale_b,
                 reinterpret_cast<uint32_t *>(B_d_set[s]) + bitcos_signs_off,
                 reinterpret_cast<uint32_t *>(B_d_set[s]) + bitcos_offsets_off,
-                Acc_d, Cnt_d);
+                SliceRanks_d_set[s], Acc_d, Cnt_d);
         double t0 = get_time_seconds();
         prof.cpu_start();
         auto e = queue.submit([&](handler &cgh) {
@@ -538,12 +560,16 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
         //   ScaleB : K/gs * N * sizeof(fp16)       (read)
         const double bytes_a      = static_cast<double>(M) * K
                 * sizeof(data_type_a);
-        const double bytes_b      = static_cast<double>(K) * N / 8.0; // 1 bit/wt
+        const double bytes_b      = static_cast<double>(size_b_payload)
+                * sizeof(data_type_b);
         const double bytes_c      = static_cast<double>(M) * N
                 * sizeof(data_type_c);
         const double bytes_scaleb = static_cast<double>(ks_groups) * N
                 * sizeof(data_type_scale);
-        const double bytes_total  = bytes_a + bytes_b + bytes_c + bytes_scaleb;
+        const double bytes_ranks = static_cast<double>(size_slice_ranks)
+                * sizeof(uint32_t);
+        const double bytes_total = bytes_a + bytes_b + bytes_c + bytes_scaleb
+                + bytes_ranks;
 
         // GiB/s (binary, 1024^3).
         constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
@@ -560,7 +586,8 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
                   << "  (A=" << bytes_a / (1024.0 * 1024.0)
                   << ", B=" << bytes_b / (1024.0 * 1024.0)
                   << ", C=" << bytes_c / (1024.0 * 1024.0)
-                  << ", ScaleB=" << bytes_scaleb / 1024.0 << " KiB)"
+                  << ", ScaleB=" << bytes_scaleb / 1024.0 << " KiB"
+                  << ", SliceRanks=" << bytes_ranks / 1024.0 << " KiB)"
                   << "\n";
     }
 
@@ -630,6 +657,7 @@ void run_gemm_impl_inner(const RunConfig &cfg) {
         free(B_d_set[s], context);
         free(C_d_set[s], context);
         free(ScaleB_d_set[s], context);
+        if (SliceRanks_d_set[s]) free(SliceRanks_d_set[s], context);
     }
     free(Acc_d, context);
     free(Cnt_d, context);
@@ -683,8 +711,70 @@ void run_gemm(const RunConfig &cfg) {
         const int W = cfg.override_wg_n;
         const int SN_ = cfg.override_sg_n;
         const int SK_ = cfg.override_sg_k;
+                const int KS_ = cfg.override_ks > 0 ? cfg.override_ks : 1;
+                const int LS_ = cfg.override_ls > 0 ? cfg.override_ls : 1;
+                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 2) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
+                    return;
+                }
+                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 4) {
+                        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                                        /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
+                        return;
+                }
+                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 8) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/8>(cfg);
+                    return;
+                }
+                if (W == 32 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 8) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/8>(cfg);
+                    return;
+                }
+                if (W == 32 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 16) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/16>(cfg);
+                    return;
+                }
+                if (W == 128 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 4) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
+                    return;
+                }
+                if (W == 128 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 4) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/64, /*KS*/1, /*LS*/4>(cfg);
+                    return;
+                }
+                if (W == 256 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 2) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/256, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/64, /*KS*/1, /*LS*/2>(cfg);
+                    return;
+                }
+                if (W == 256 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 2) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/256, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
+                    return;
+                }
+                if (W == 64 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 8) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/64, /*KS*/1, /*LS*/8>(cfg);
+                    return;
+                }
+                if (W == 32 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 16) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
+                            /*SGK*/64, /*KS*/1, /*LS*/16>(cfg);
+                    return;
+                }
+                if (W == 128 && SN_ == 32 && SK_ == 64 && KS_ == 1 && LS_ == 4) {
+                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/32,
+                            /*SGK*/64, /*KS*/1, /*LS*/4>(cfg);
+                    return;
+                }
 #define DISPATCH(W_, SN, SK) \
-    if (W == W_ && SN_ == SN && SK_ == SK) { \
+        if (W == W_ && SN_ == SN && SK_ == SK && KS_ == 1 && LS_ == 1) { \
         run_gemm_impl</*WGM*/1, /*WGN*/W_, /*SGM*/1, /*SGN*/SN, \
                 /*SGK*/SK, /*KS*/1, /*LS*/1>(cfg); \
         return; \
@@ -694,21 +784,23 @@ void run_gemm(const RunConfig &cfg) {
         DISPATCH(256, 16, 128) DISPATCH(256, 32, 64)  DISPATCH(256, 32, 128)
         DISPATCH(64, 16, 64)   DISPATCH(128, 16, 64)  DISPATCH(256, 16, 64)
         DISPATCH(64, 16, 32)   DISPATCH(128, 16, 32)  DISPATCH(256, 16, 32)
+        DISPATCH(512, 16, 32)  DISPATCH(512, 16, 64)  DISPATCH(512, 16, 128)
+        DISPATCH(512, 32, 64)  DISPATCH(512, 32, 128)
 #undef DISPATCH
         std::cerr << "Override (wg_n=" << W << " sg_n=" << SN_
                   << " sg_k=" << SK_ << ") not in dispatch grid\n";
         std::exit(1);
     }
 
-    // For M=1, dispatch to one of four GEMV-tuned tiers based on N. For
+        // For M=1, dispatch to one of four GEMV-tuned tiers based on N. For
     // M>1 the wider wg_n=128 is a small but consistent win.
     const bool gemv_tiny_n = (cfg.matrix_m == 1) && (cfg.matrix_n <= 4096);
     const bool gemv_mid_n  = (cfg.matrix_m == 1) && (cfg.matrix_n > 4096)
             && (cfg.matrix_n <= 8192);
-    // M=1 above 8192: single tier wg_n=64 KS=1 LS=2 wins both the
-    // upper-mid (8192 < N <= 16384) range AND the very-large N range
-    // (>16384) on int1 (sweep across N in {9216, 10240, 11264, 12288,
-    // 13312, 14336, 15360, 16384, 32768}).
+        // Large N uses the Xe2 LUT/gather-tuned wg_n=256 tile. Mid N has enough
+        // spatial underfill that four local K slices recover substantially more
+        // throughput; offline prefix ranks let each slice enter the compact sign
+        // stream without duplicating it.
     const bool gemv_upper_n = (cfg.matrix_m == 1) && (cfg.matrix_n > 8192);
 
     if (gemv_tiny_n) {
@@ -718,8 +810,8 @@ void run_gemm(const RunConfig &cfg) {
     }
 
     if (gemv_mid_n) {
-        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                /*SGK*/128, /*KS*/1, /*LS*/1>(cfg);
+        run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
+                /*SGK*/64, /*KS*/1, /*LS*/4>(cfg);
         return;
     }
 

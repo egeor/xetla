@@ -100,11 +100,8 @@ class gemm_universal_t<dispatch_policy_bitcos_fp16_upcvt_kslicing<group_swizzle_
             "min slicing ratio is 1");
     static_assert((num_local_kslicing & (num_local_kslicing - 1)) == 0,
             "num_local_kslicing should be power of 2!");
-    // A subgroup locates its first sign bit from a rank it accumulates from
-    // k=0, so it cannot start part way down K.
-    static_assert(num_global_kslicing == 1 && num_local_kslicing == 1,
-            "BITCOS sign runs are per-column bit streams: K-slicing would "
-            "require the population count of all preceding K rows");
+    static_assert(num_global_kslicing == 1,
+            "BITCOS global K slicing needs globally indexed rank metadata");
 
     using kslicing_t = group::cooperative_reduce_t<reduce_op::sum, tile_shape,
             matAcc_t, num_local_kslicing, gpu_arch::Xe>;
@@ -151,6 +148,7 @@ public:
         // planes 2 and 3 of the BITCOS buffer; derived by the caller from (K, N)
         uint32_t *signs_base;
         uint32_t *offsets_base;
+        uint32_t *slice_ranks_base;
 
         inline arguments_t() = default;
         static constexpr bool host_callable = true;
@@ -162,6 +160,7 @@ public:
                 scale_base_t scale_base_, uint32_t scale_ld_,
                 uint32_t *signs_base_ = nullptr,
                 uint32_t *offsets_base_ = nullptr,
+                uint32_t *slice_ranks_base_ = nullptr,
                 acc_base_t acc_base_ = {}, cnt_base_t cnt_base_ = {},
                 epilogue_args_t epilogue_args_ = {})
             : matrix_m(matrix_m_)
@@ -179,7 +178,8 @@ public:
             , scale_base(scale_base_)
             , scale_ld(scale_ld_)
             , signs_base(signs_base_)
-            , offsets_base(offsets_base_) {}
+            , offsets_base(offsets_base_)
+            , slice_ranks_base(slice_ranks_base_) {}
 
         inline arguments_t(const arguments_t &args)
             : matrix_m(args.matrix_m)
@@ -197,7 +197,8 @@ public:
             , scale_base(args.scale_base)
             , scale_ld(args.scale_ld)
             , signs_base(args.signs_base)
-            , offsets_base(args.offsets_base) {}
+            , offsets_base(args.offsets_base)
+            , slice_ranks_base(args.slice_ranks_base) {}
 
         inline arguments_t &operator=(const arguments_t &args) {
             this->matrix_m = args.matrix_m;
@@ -213,6 +214,7 @@ public:
             this->scale_ld = args.scale_ld;
             this->signs_base = args.signs_base;
             this->offsets_base = args.offsets_base;
+            this->slice_ranks_base = args.slice_ranks_base;
             this->acc_base = args.acc_base;
             this->cnt_base = args.cnt_base;
             this->epilogue_args = args.epilogue_args;
@@ -230,7 +232,9 @@ public:
     }
 
     __XETLA_API static constexpr uint32_t get_slm_size() {
-        constexpr uint32_t size = gemm_slm_size * num_local_kslicing
+        constexpr uint32_t gemm_slm_partitions
+                = gemm_t::share_slm_across_kslices ? 1 : num_local_kslicing;
+        constexpr uint32_t size = gemm_slm_size * gemm_slm_partitions
                 + kslicing_slm_size + epilogue_slm_size * num_local_kslicing;
         static_assert(size <= (128 * 1024),
                 "The local memory size should be less than 128KB!");
@@ -368,11 +372,14 @@ public:
         uint32_t gemm_slm_base = slm_base;
         uint32_t gemm_nbarr_base = nbarrier_base;
         if constexpr (num_local_kslicing > 1) {
-            gemm_slm_base = slm_base + wg_id * gemm_slm_size;
+            if constexpr (!gemm_t::share_slm_across_kslices)
+                gemm_slm_base = slm_base + wg_id * gemm_slm_size;
             gemm_nbarr_base = nbarrier_base + wg_id * gemm_nbarr_count;
         }
+        constexpr uint32_t gemm_slm_partitions
+                = gemm_t::share_slm_across_kslices ? 1 : num_local_kslicing;
         uint32_t kslicing_slm_base
-                = slm_base + num_local_kslicing * gemm_slm_size;
+                = slm_base + gemm_slm_partitions * gemm_slm_size;
         uint32_t kslicing_nbarr_base
                 = nbarrier_base + num_local_kslicing * gemm_nbarr_count;
         uint32_t epilogue_slm_base = kslicing_slm_base + kslicing_slm_size;
@@ -397,8 +404,15 @@ public:
                 {start_x_scale, start_y_scale});
 
         uint32_t inner_loop_count = (wg_tile_k + k_stride - 1) / k_stride;
+        uint32_t *initial_ranks = nullptr;
+        if constexpr (num_local_kslicing > 1) {
+            if (wg_id > 0)
+                initial_ranks = args.slice_ranks_base
+                        + static_cast<size_t>(wg_id - 1) * args.matrix_n;
+        }
         gemm_args_t gemm_args(mem_desc_a, mem_desc_b, inner_loop_count,
-                mem_desc_scale, args.signs_base, args.offsets_base);
+                mem_desc_scale, args.signs_base, args.offsets_base,
+                initial_ranks);
         matAcc_t matAcc;
         matAcc.init(0);
         gemm_t gemm;

@@ -14,6 +14,7 @@ else
 endif
 
 CXXFLAGS = -std=c++20 -O3 -fsycl -qopenmp \
+		   -DBITCOS_FP16_LUT -DBITCOS_SIGN_GATHER4 -DBITCOS_FP_STORE \
            -I../include -I../tests -I../tests/utils \
            -I../tests/integration/gemm \
            -I../tests/3rd_parties/googletest/googletest/include
@@ -54,6 +55,13 @@ $(BUILDDIR):
 test: $(TARGET)
 	@echo "Running int1 fp16 upcvt test..."
 	@./$(TARGET)
+
+s2_probe: $(BUILDDIR)/s2_probe
+
+$(BUILDDIR)/s2_probe: $(SRCDIR)/s2_probe.cpp $(SRCDIR)/bitcos_format.hpp | $(BUILDDIR)
+	@echo "Compiling s2_probe.cpp..."
+	@$(CXX) $(CXXFLAGS) -I$(SRCDIR) $< -o $@ $(LDFLAGS)
+	@echo "Built $@"
 
 clean:
 	@rm -rf $(BUILDDIR)
