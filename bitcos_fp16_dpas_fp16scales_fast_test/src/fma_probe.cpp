@@ -3,6 +3,7 @@
 // immediately and never materialised into a VNNI accumulator tile.
 #include <sycl/sycl.hpp>
 #include <sycl/ext/intel/esimd.hpp>
+#include <sycl/ext/intel/experimental/esimd/math.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,11 @@ using namespace sycl;
 using namespace sycl::ext::intel::esimd;
 
 static constexpr int kLanes = 16;
+#ifdef FMA_FP16_ACC
+using acc_t = half;
+#else
+using acc_t = float;
+#endif
 
 int main(int argc, char **argv) {
     int N = 32768, K = 16384, iters = 50;
@@ -49,7 +55,7 @@ int main(int argc, char **argv) {
     uint32_t *d_buf = malloc_device<uint32_t>(buf.size(), q);
     half *d_a = malloc_device<half>(K, q);
     half *d_scale = malloc_device<half>(N, q);
-    float *d_c = malloc_device<float>(N, q);
+        acc_t *d_c = malloc_device<acc_t>(N, q);
 
     std::vector<half> ha(K), hs(N);
     {
@@ -80,7 +86,14 @@ int main(int argc, char **argv) {
                             = block_load<uint16_t, kLanes>(
                                       reinterpret_cast<const uint16_t *>(
                                               d_scale + n0));
-                    simd<float, kLanes> acc = 0.f;
+                    simd<acc_t, kLanes> acc = acc_t(0);
+                    using bfn_t = sycl::ext::intel::esimd::bfn_t;
+                    constexpr bfn_t make_value
+                            = (bfn_t::x ^ bfn_t::y) & bfn_t::z;
+                    constexpr bfn_t advance_signs
+                            = (bfn_t::x & bfn_t::z)
+                            | (bfn_t::y & ~bfn_t::z);
+                    simd<uint32_t, kLanes> bf_width = 1u;
 
                     for (int kp = 0; kp < KP; ++kp) {
                         simd<uint32_t, kLanes> bmp = block_load<uint32_t, kLanes>(
@@ -102,50 +115,51 @@ int main(int argc, char **argv) {
                                 = block_load<half, 32>(d_a + kp * 32);
 #pragma unroll
                         for (int c = 0; c < 32; ++c) {
-                            simd<uint32_t, kLanes> present = (bmp >> c) & 1u;
-                            simd<uint32_t, kLanes> mag = 0u - present;
-                            simd<uint32_t, kLanes> sgn = (w & 1u) << 15;
-                            simd<uint32_t, kLanes> vb = (scale32 ^ sgn) & mag;
+                            simd<uint32_t, kLanes> bf_offset = c;
+                            simd<uint32_t, kLanes> mag
+                                    = __esimd_sbfe<uint32_t, kLanes>(
+                                            bf_width.data(), bf_offset.data(),
+                                            bmp.data());
+                            simd<uint32_t, kLanes> sgn = w << 15;
+                            simd<uint32_t, kLanes> vb
+                                    = bfn<make_value>(scale32, sgn, mag);
                             simd<uint16_t, kLanes> v16 = vb;
                             simd<half, kLanes> vh
                                     = v16.template bit_cast_view<half>();
-                            const float ak = static_cast<float>(av[c]);
+                            const acc_t ak = static_cast<acc_t>(av[c]);
                             acc += ak * vh;
-                            w = w >> present;
+                            simd<uint32_t, kLanes> w_shifted = w >> 1;
+                            w = bfn<advance_signs>(w_shifted, w, mag);
                         }
                         rank += cbit(bmp);
                     }
-                    block_store<float, kLanes>(d_c + n0, acc);
+                    block_store<acc_t, kLanes>(d_c + n0, acc);
                 });
     };
 
     run().wait();
 
-    std::vector<float> hc(N);
-    q.memcpy(hc.data(), d_c, N * sizeof(float)).wait();
+        std::vector<acc_t> hc(N);
+        q.memcpy(hc.data(), d_c, N * sizeof(acc_t)).wait();
     size_t bad = 0;
     for (int n = 0; n < N; ++n) {
         double ref = 0.0;
         for (int k = 0; k < K; ++k)
             ref += double(float(ha[k])) * codes[size_t(k) * N + n]
                     * double(float(hs[n]));
-        double d = std::abs(ref - hc[n]);
+        double d = std::abs(ref - double(float(hc[n])));
         if (d > 0.05 * (std::abs(ref) + 1.0)) ++bad;
     }
     std::printf("mismatches: %zu / %d\n", bad, N);
 
-    double best = 1e30;
-    for (int r = 0; r < 3; ++r) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < iters; ++i) run();
-        q.wait();
-        auto t1 = std::chrono::high_resolution_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count()
-                / iters;
-        if (ms < best) best = ms;
-    }
-    std::printf("FMA probe: %.4f ms  (DPAS kernel = 0.499 ms, int2 = 0.2256 ms)\n",
-            best);
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < iters; ++i) run();
+    q.wait();
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count()
+            / iters;
+    std::printf("FMA probe: %.4f ms  (DPAS kernel = 0.380 ms, int2 = 0.2256 ms)\n",
+            ms);
 
     free(d_buf, q); free(d_a, q); free(d_scale, q); free(d_c, q);
     return 0;

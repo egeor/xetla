@@ -724,16 +724,9 @@ void run_gemm(const RunConfig &cfg) {
     }
 
     if (gemv_upper_n) {
-        // wg_n=64 KS=1 LS=2:
-        //   - At off-aligned N (9216, 10240, 13312, 14336) wg_n=128 dips
-        //     5-12%; wg_n=64 keeps WG count high enough to fill multiple
-        //     waves uniformly.
-        //   - At well-aligned N (12288, 16384) wg_n=128 is only ~1-2%
-        //     ahead -- not worth the off-alignment penalty.
-        //   - At very large N (32768) wg_n=64 KS=1 LS=2 = 346 GiB/s,
-        //     beating wg_n=128 KS=1 LS=1 (= 343 GiB/s).
-        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                /*SGK*/128, /*KS*/1, /*LS*/1>(cfg);
+        // Retuned after the Xe2 bfe/bfn unpack reduced register movement.
+        run_gemm_impl</*WGM*/1, /*WGN*/256, /*SGM*/1, /*SGN*/16,
+                /*SGK*/64, /*KS*/1, /*LS*/1>(cfg);
         return;
     }
 
