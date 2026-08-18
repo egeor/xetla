@@ -37,6 +37,7 @@
 
 #include "experimental/group/gemm/common.hpp"
 #include "experimental/group/gemm/compute_policy.hpp"
+#include <sycl/ext/intel/experimental/esimd/math.hpp>
 
 namespace gpu::xetla::group {
 
@@ -523,56 +524,66 @@ private:
                 for (uint32_t ii = 0; ii < packed_per_scale; ++ii) {
                     const uint32_t i_pk = g_ * packed_per_scale + ii;
                     const int packed_block_id = i_pk * num_block_x + j;
-
-                    auto bmp = matB.reg
-                                       .xetla_select<matB_t::block_elems, 1>(
-                                               packed_block_id
-                                               * matB_t::block_elems)
-                                       .xetla_format<uint32_t>();
+                    xetla_vector<uint32_t, BSX> bmp
+                            = matB.reg
+                                      .xetla_select<matB_t::block_elems, 1>(
+                                              packed_block_id
+                                              * matB_t::block_elems)
+                                      .xetla_format<uint32_t>();
                     xetla_vector<uint32_t, BSX> w = w_all[ii];
-
                     auto dst_lo = matB_acc.reg.xetla_select<
                             matB_acc_t::block_elems, 1>(
-                            (i_pk * 2u + 0u) * num_block_x * matB_acc_t::block_elems
-                            + j * matB_acc_t::block_elems);
+                            (i_pk * 2u + 0u) * num_block_x
+                                            * matB_acc_t::block_elems
+                                    + j * matB_acc_t::block_elems);
                     auto dst_hi = matB_acc.reg.xetla_select<
                             matB_acc_t::block_elems, 1>(
-                            (i_pk * 2u + 1u) * num_block_x * matB_acc_t::block_elems
-                            + j * matB_acc_t::block_elems);
+                            (i_pk * 2u + 1u) * num_block_x
+                                            * matB_acc_t::block_elems
+                                    + j * matB_acc_t::block_elems);
                     auto dst_lo_u16 = dst_lo.xetla_format<uint16_t>();
                     auto dst_hi_u16 = dst_hi.xetla_format<uint16_t>();
+                    using bfn_t = sycl::ext::intel::esimd::bfn_t;
+                    constexpr bfn_t make_value
+                            = (bfn_t::x ^ bfn_t::y) & bfn_t::z;
+                    constexpr bfn_t advance_signs
+                            = (bfn_t::x & bfn_t::z)
+                            | (bfn_t::y & ~bfn_t::z);
+                    xetla_vector<uint32_t, BSX> bf_width = uint32_t(1u);
 
-                    // K-rows 0..15 then 16..31: the window must be consumed in
-                    // k order, so the halves cannot be swapped.
 #pragma unroll
                     for (uint32_t c = 0; c < BSY_acc; ++c) {
-                        xetla_vector<uint32_t, BSX> present
-                                = (bmp >> c) & uint32_t(1u);
+                        xetla_vector<uint32_t, BSX> bf_offset = c;
                         xetla_vector<uint32_t, BSX> mag_mask
-                                = uint32_t(0) - present;
-                        xetla_vector<uint32_t, BSX> sign_xor
-                                = (w & uint32_t(1u)) << 15;
+                                = __esimd_sbfe<uint32_t, BSX>(bf_width.data(),
+                                        bf_offset.data(), bmp.data());
+                        xetla_vector<uint32_t, BSX> sign_xor = w << 15;
                         xetla_vector<uint32_t, BSX> result
-                                = (scale32 ^ sign_xor) & mag_mask;
+                                = sycl::ext::intel::esimd::bfn<make_value>(
+                                        scale32, sign_xor, mag_mask);
                         dst_lo_u16.xetla_select<BSX, 2>(
                                 (c >> 1) * 2u * BSX + (c & 1u))
                                 = result;
-                        w = w >> present;
+                        xetla_vector<uint32_t, BSX> w_shifted = w >> 1;
+                        w = sycl::ext::intel::esimd::bfn<advance_signs>(
+                                w_shifted, w, mag_mask);
                     }
 #pragma unroll
                     for (uint32_t c = 0; c < BSY_acc; ++c) {
-                        xetla_vector<uint32_t, BSX> present
-                                = (bmp >> (c + BSY_acc)) & uint32_t(1u);
+                        xetla_vector<uint32_t, BSX> bf_offset = c + BSY_acc;
                         xetla_vector<uint32_t, BSX> mag_mask
-                                = uint32_t(0) - present;
-                        xetla_vector<uint32_t, BSX> sign_xor
-                                = (w & uint32_t(1u)) << 15;
+                                = __esimd_sbfe<uint32_t, BSX>(bf_width.data(),
+                                        bf_offset.data(), bmp.data());
+                        xetla_vector<uint32_t, BSX> sign_xor = w << 15;
                         xetla_vector<uint32_t, BSX> result
-                                = (scale32 ^ sign_xor) & mag_mask;
+                                = sycl::ext::intel::esimd::bfn<make_value>(
+                                        scale32, sign_xor, mag_mask);
                         dst_hi_u16.xetla_select<BSX, 2>(
                                 (c >> 1) * 2u * BSX + (c & 1u))
                                 = result;
-                        w = w >> present;
+                        xetla_vector<uint32_t, BSX> w_shifted = w >> 1;
+                        w = sycl::ext::intel::esimd::bfn<advance_signs>(
+                                w_shifted, w, mag_mask);
                     }
                 }
                 rank.xetla_select<BSX, 1>(j * BSX) = rank_j;
