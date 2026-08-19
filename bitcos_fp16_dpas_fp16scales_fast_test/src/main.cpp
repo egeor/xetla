@@ -711,81 +711,72 @@ void run_gemm(const RunConfig &cfg) {
         const int W = cfg.override_wg_n;
         const int SN_ = cfg.override_sg_n;
         const int SK_ = cfg.override_sg_k;
-                const int KS_ = cfg.override_ks > 0 ? cfg.override_ks : 1;
-                const int LS_ = cfg.override_ls > 0 ? cfg.override_ls : 1;
-                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 2) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
-                    return;
-                }
-                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 4) {
-                        run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                                        /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
-                        return;
-                }
-                if (W == 64 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 8) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/8>(cfg);
-                    return;
-                }
-                if (W == 32 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 8) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/8>(cfg);
-                    return;
-                }
-                if (W == 32 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 16) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/16>(cfg);
-                    return;
-                }
-                if (W == 128 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 4) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/4>(cfg);
-                    return;
-                }
-                if (W == 128 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 4) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/64, /*KS*/1, /*LS*/4>(cfg);
-                    return;
-                }
-                if (W == 256 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 2) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/256, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/64, /*KS*/1, /*LS*/2>(cfg);
-                    return;
-                }
-                if (W == 256 && SN_ == 16 && SK_ == 128 && KS_ == 1 && LS_ == 2) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/256, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/128, /*KS*/1, /*LS*/2>(cfg);
-                    return;
-                }
-                if (W == 64 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 8) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/64, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/64, /*KS*/1, /*LS*/8>(cfg);
-                    return;
-                }
-                if (W == 32 && SN_ == 16 && SK_ == 64 && KS_ == 1 && LS_ == 16) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/32, /*SGM*/1, /*SGN*/16,
-                            /*SGK*/64, /*KS*/1, /*LS*/16>(cfg);
-                    return;
-                }
-                if (W == 128 && SN_ == 32 && SK_ == 64 && KS_ == 1 && LS_ == 4) {
-                    run_gemm_impl</*WGM*/1, /*WGN*/128, /*SGM*/1, /*SGN*/32,
-                            /*SGK*/64, /*KS*/1, /*LS*/4>(cfg);
-                    return;
-                }
-#define DISPATCH(W_, SN, SK) \
-        if (W == W_ && SN_ == SN && SK_ == SK && KS_ == 1 && LS_ == 1) { \
+        const int KS_ = cfg.override_ks > 0 ? cfg.override_ks : 1;
+        const int LS_ = cfg.override_ls > 0 ? cfg.override_ls : 1;
+#define DISPATCH(W_, SN, SK, LS) \
+    if (W == W_ && SN_ == SN && SK_ == SK && KS_ == 1 && LS_ == LS) { \
         run_gemm_impl</*WGM*/1, /*WGN*/W_, /*SGM*/1, /*SGN*/SN, \
-                /*SGK*/SK, /*KS*/1, /*LS*/1>(cfg); \
+                /*SGK*/SK, /*KS*/1, /*LS*/LS>(cfg); \
         return; \
     }
-        DISPATCH(64, 16, 128)  DISPATCH(64, 32, 64)   DISPATCH(64, 32, 128)
-        DISPATCH(128, 16, 128) DISPATCH(128, 32, 64)  DISPATCH(128, 32, 128)
-        DISPATCH(256, 16, 128) DISPATCH(256, 32, 64)  DISPATCH(256, 32, 128)
-        DISPATCH(64, 16, 64)   DISPATCH(128, 16, 64)  DISPATCH(256, 16, 64)
-        DISPATCH(64, 16, 32)   DISPATCH(128, 16, 32)  DISPATCH(256, 16, 32)
-        DISPATCH(512, 16, 32)  DISPATCH(512, 16, 64)  DISPATCH(512, 16, 128)
-        DISPATCH(512, 32, 64)  DISPATCH(512, 32, 128)
+#define DISPATCH_K(W_, SN, LS) \
+    DISPATCH(W_, SN, 32, LS) \
+    DISPATCH(W_, SN, 64, LS) \
+    DISPATCH(W_, SN, 128, LS)
+
+#ifndef BITCOS_TUNING_GROUP
+#define BITCOS_TUNING_GROUP 0
+#endif
+#if BITCOS_TUNING_GROUP == 0
+        // Production and previously validated manual overrides.
+        DISPATCH(64, 16, 128, 1) DISPATCH(64, 16, 128, 4)
+        DISPATCH(128, 16, 64, 4) DISPATCH(256, 16, 64, 1)
+        DISPATCH(512, 16, 64, 1)
+#elif BITCOS_TUNING_GROUP == 1
+        // sg_n=16: full 32-subgroup frontier plus one lower-slicing neighbor.
+        DISPATCH_K(32, 16, 16)  DISPATCH_K(32, 16, 8)
+        DISPATCH_K(64, 16, 8)   DISPATCH_K(64, 16, 4)
+        DISPATCH(32, 16, 64, 1) DISPATCH(32, 16, 64, 2)
+        DISPATCH(32, 16, 64, 4)
+        DISPATCH(64, 16, 64, 1) DISPATCH(64, 16, 64, 2)
+        // Wider-K edge probes at the most promising geometries.
+        DISPATCH(32, 16, 256, 16) DISPATCH(64, 16, 256, 8)
+#elif BITCOS_TUNING_GROUP == 2
+        DISPATCH_K(128, 16, 4)  DISPATCH_K(128, 16, 2)
+        DISPATCH_K(256, 16, 2)  DISPATCH_K(256, 16, 1)
+        DISPATCH_K(512, 16, 1)
+        DISPATCH(128, 16, 64, 1)
+        DISPATCH(128, 16, 256, 4)
+#elif BITCOS_TUNING_GROUP == 3
+        // sg_n=32: equivalent subgroup-count frontier and neighbors.
+        DISPATCH_K(32, 32, 16)
+        DISPATCH(32, 32, 64, 1) DISPATCH(32, 32, 64, 2)
+        DISPATCH(32, 32, 64, 4) DISPATCH(32, 32, 64, 8)
+        DISPATCH(32, 32, 64, 32)
+#elif BITCOS_TUNING_GROUP == 6
+        DISPATCH_K(64, 32, 16)
+#elif BITCOS_TUNING_GROUP == 7
+        DISPATCH_K(64, 32, 8)
+#elif BITCOS_TUNING_GROUP == 8
+        DISPATCH(64, 32, 64, 1)
+#elif BITCOS_TUNING_GROUP == 9
+        DISPATCH(64, 32, 64, 2)
+#elif BITCOS_TUNING_GROUP == 10
+        DISPATCH(64, 32, 64, 4)
+#elif BITCOS_TUNING_GROUP == 4
+        DISPATCH_K(128, 32, 8)  DISPATCH_K(128, 32, 4)
+        DISPATCH_K(256, 32, 4)  DISPATCH_K(256, 32, 2)
+        DISPATCH_K(512, 32, 2)  DISPATCH_K(512, 32, 1)
+        DISPATCH(128, 32, 64, 1) DISPATCH(128, 32, 64, 2)
+        DISPATCH(256, 32, 64, 1)
+#elif BITCOS_TUNING_GROUP == 5
+        // Wide subgroup probes; these are expected to stress GRF capacity.
+        DISPATCH(256, 64, 64, 8) DISPATCH(512, 64, 64, 4)
+        DISPATCH(1024, 32, 64, 1) DISPATCH(1024, 64, 64, 2)
+#else
+#error "unsupported BITCOS_TUNING_GROUP"
+#endif
+#undef DISPATCH_K
 #undef DISPATCH
         std::cerr << "Override (wg_n=" << W << " sg_n=" << SN_
                   << " sg_k=" << SK_ << ") not in dispatch grid\n";

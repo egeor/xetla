@@ -32,9 +32,26 @@ OBJECTS = $(BUILDDIR)/main.o
 INT1_GROUP_HEADER  = ../include/experimental/group/gemm/impl/bitcos_fp16_upcvt_xmx_xe.hpp
 INT1_KERNEL_HEADER = ../include/experimental/kernel/gemm/impl/bitcos_fp16_upcvt_kslicing_xe.hpp
 
-.PHONY: all clean test help
+.PHONY: all clean test tuning help
 
 all: $(TARGET)
+
+TUNING_GROUPS  = 1 2 3 4 5 6 7 8 9 10
+TUNING_TARGETS = $(foreach G,$(TUNING_GROUPS),$(BUILDDIR)/bitcos_tune_g$(G))
+
+tuning: $(TUNING_TARGETS)
+
+define TUNING_GROUP_template
+$(BUILDDIR)/main_tune_g$(1).o: $(SRCDIR)/main.cpp $(INT1_GROUP_HEADER) $(INT1_KERNEL_HEADER) | $(BUILDDIR)
+	@echo "Compiling tuning group $(1)..."
+	@$(CXX) $(CXXFLAGS) -DBITCOS_TUNING_GROUP=$(1) -c $$< -o $$@
+
+$(BUILDDIR)/bitcos_tune_g$(1): $(BUILDDIR)/main_tune_g$(1).o $(GTEST_OBJECTS) | $(BUILDDIR)
+	@echo "Linking tuning group $(1)..."
+	@$(CXX) $(CXXFLAGS) $$^ -o $$@ $(LDFLAGS)
+endef
+
+$(foreach G,$(TUNING_GROUPS),$(eval $(call TUNING_GROUP_template,$(G))))
 
 $(TARGET): $(OBJECTS) $(GTEST_OBJECTS) | $(BUILDDIR)
 	@echo "Linking bitcos fp16 test..."
@@ -69,5 +86,6 @@ clean:
 help:
 	@echo "Targets:"
 	@echo "  all   - Build $(TARGET)"
+	@echo "  tuning - Build five precompiled tuning-grid executables"
 	@echo "  test  - Build and run"
 	@echo "  clean - Remove build artifacts"
