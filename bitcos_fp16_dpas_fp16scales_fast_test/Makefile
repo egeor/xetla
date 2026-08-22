@@ -14,7 +14,8 @@ else
 endif
 
 CXXFLAGS = -std=c++20 -O3 -fsycl -qopenmp \
-		   -DBITCOS_FP16_LUT -DBITCOS_SIGN_GATHER4 -DBITCOS_FP_STORE \
+		   -DBITCOS_FP16_LUT -DBITCOS_SIGN_GATHER4 -DBITCOS_SIGN_GATHER3 \
+		   -DBITCOS_FP_STORE \
            -I../include -I../tests -I../tests/utils \
            -I../tests/integration/gemm \
            -I../tests/3rd_parties/googletest/googletest/include

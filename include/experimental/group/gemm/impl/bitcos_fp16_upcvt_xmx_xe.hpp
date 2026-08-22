@@ -650,19 +650,23 @@ private:
 #ifdef BITCOS_SIGN_GATHER4
                     // A 32-row block advances rank by at most 32 bits, so each
                     // successive block's word index moves by at most one. With
-                    // two blocks the union of both windows spans words 0..2, so
-                    // a single d32x4 at block 0's address provably covers both
-                    // and the per-block pick is a 1-bit select. Blocks past the
-                    // second would need words beyond the quad, so they keep the
-                    // narrow path.
+                    // two blocks the union of both windows spans words 0..2.
+                    // A d32x3 fetch is exact; d32x4 is retained as the fallback
+                    // message. Blocks past the second need a wider window and
+                    // therefore keep the narrow path.
                     if constexpr (packed_per_scale <= 2) {
                     xetla_vector<uint32_t, BSX> word0 = rank_ii[0] >> 5;
                     xetla_vector<uint32_t, BSX> quad_off = (off_j + word0) << 2;
 #ifdef BITCOS_ALU_ONLY
                     quad_off = quad_off & uint32_t(0x3FFFu);
 #endif
+#ifdef BITCOS_SIGN_GATHER3
+                    xetla_vector<uint32_t, 3 * BSX> quad
+                            = xetla_load_global<uint32_t, 3,
+#else
                     xetla_vector<uint32_t, 4 * BSX> quad
                             = xetla_load_global<uint32_t, 4,
+#endif
                                     data_size::default_size, cache_hint::cached,
                                     cache_hint::cached, BSX>(
                                     signs_base, quad_off);
