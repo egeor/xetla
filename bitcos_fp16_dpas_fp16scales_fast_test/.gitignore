@@ -2,3 +2,7 @@ build/
 *.o
 *.spv
 dump/
+isa_*/
+dump_grf/
+dump_nogrf/
+build_*/

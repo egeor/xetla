@@ -1,4 +1,0 @@
-------------------------------------------------
-VC_asm10f32073a66dae96_internal_options.txt
-------------------------------------------------
--cl-intel-use-bindless-mode -cl-intel-use-bindless-advanced-mode -ze-intel-has-buffer-offset-arg -cl-intel-greater-than-4GB-buffer-required -cl-store-cache-default=2 -cl-load-cache-default=4
