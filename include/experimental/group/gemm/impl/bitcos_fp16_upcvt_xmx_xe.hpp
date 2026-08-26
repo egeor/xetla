@@ -224,7 +224,13 @@ public:
                                                                    : 0;
 #endif
 #ifdef BITCOS_FP16_LUT
-#ifdef BITCOS_INT8_LUT
+#ifdef BITCOS_SLM64K_PROBE
+    // Occupancy probe for the 8-bit-index LUT: reserve the 64 KB that a
+    // 2^16-entry table would need, but keep using the 2 KB table. Isolates the
+    // residency cost (128 KB SLM per Xe-core, so 2 work-groups) from the
+    // gather-rate and bit-expansion effects.
+    static constexpr uint32_t slm_size = 64 * 1024 + 128;
+#elif defined(BITCOS_INT8_LUT)
     static constexpr uint32_t slm_size = 256 * 4 + 128;
 #elif defined(BITCOS_LUT_STRIDE12)
     static constexpr uint32_t slm_size = 256 * 12 + 128;
@@ -844,6 +850,15 @@ private:
                     sc_rep.xetla_select<BSX, 2>(2 * BSX) = scale_vec;
                     sc_rep.xetla_select<BSX, 2>(2 * BSX + 1) = scale_vec;
 #endif
+#ifdef BITCOS_LUT8_GATHER_PROBE
+                    // Ceiling probe for the 8-bit-index bitmask LUT: refresh
+                    // the entry only on even groups, so the gather runs once
+                    // per 8 weights instead of once per 4. Everything else is
+                    // unchanged, so the delta is the most that halving the
+                    // gather rate can buy before any bit-expansion cost is
+                    // added back. Results are wrong by construction.
+                    xetla_vector<uint32_t, 2 * BSX> e_keep;
+#endif
 #pragma unroll
                     for (uint32_t g = 0; g < 2 * BSY_acc / 4; ++g) {
                         constexpr uint32_t kGroups = 2 * BSY_acc / 4;
@@ -887,8 +902,16 @@ private:
                                 = e.xetla_format<int8_t>();
                         xetla_vector<fp16, 4 * BSX> code = code_i8;
 #else
+#ifdef BITCOS_LUT8_GATHER_PROBE
+                        if ((g & 1u) == 0u) {
+                            e_keep = xetla_load_local<uint32_t, 2>(
+                                    off + slm_base);
+                        }
+                        xetla_vector<uint32_t, 2 * BSX> e = e_keep;
+#else
                         xetla_vector<uint32_t, 2 * BSX> e
                                 = xetla_load_local<uint32_t, 2>(off + slm_base);
+#endif
 #ifdef BITCOS_LUT_EMBED_COUNT
                         xetla_vector<uint32_t, BSX> count
                                 = e.xetla_select<BSX, 1>(0) & uint32_t(7u);
