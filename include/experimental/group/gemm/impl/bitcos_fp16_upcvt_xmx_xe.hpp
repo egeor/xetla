@@ -902,7 +902,17 @@ private:
                                 = e.xetla_format<int8_t>();
                         xetla_vector<fp16, 4 * BSX> code = code_i8;
 #else
-#ifdef BITCOS_LUT8_GATHER_PROBE
+#ifdef BITCOS_LUT_NOGATHER_PROBE
+                        // Ceiling for any in-register lookup: issue no SLM
+                        // message at all, but synthesise the entry from `off`
+                        // so the index math still cannot be hoisted. Results
+                        // are wrong by construction; this bounds the budget an
+                        // ALU/permute replacement of the gather has to fit in.
+                        xetla_vector<uint32_t, 2 * BSX> e;
+                        e.xetla_select<BSX, 1>(0) = off;
+                        e.xetla_select<BSX, 1>(BSX)
+                                = off ^ uint32_t(0x3C003C00u);
+#elif defined(BITCOS_LUT8_GATHER_PROBE)
                         if ((g & 1u) == 0u) {
                             e_keep = xetla_load_local<uint32_t, 2>(
                                     off + slm_base);
