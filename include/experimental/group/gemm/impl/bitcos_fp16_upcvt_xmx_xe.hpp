@@ -367,6 +367,24 @@ public:
             }
         }
 
+#ifdef BITCOS_ALU_ONLY
+// Cycle the B pointer over BITCOS_GAMMA_WINDOW k-tiles instead of streaming all
+// of K. inner_loop_count is unchanged, so the kernel still runs long enough to
+// amortise launch overhead, but the weight working set shrinks to
+// window/inner_loop_count of the full footprint -- the GPU analogue of running
+// the CPU kernel out of L1. Must be a power of two.
+#ifndef BITCOS_GAMMA_WINDOW
+#define BITCOS_GAMMA_WINDOW 4
+#endif
+#ifndef BITCOS_GAMMA_SIGN_MASK
+#define BITCOS_GAMMA_SIGN_MASK 0x3FFFu
+#endif
+#define BITCOS_GAMMA_STEP(i_, tile_)                                          \
+    (((i_) & (BITCOS_GAMMA_WINDOW - 1)) == (BITCOS_GAMMA_WINDOW - 1)          \
+                    ? -(int(BITCOS_GAMMA_WINDOW) - 1) * int(tile_)            \
+                    : int(tile_))
+#endif
+
         for (uint32_t i = 0; i < args.inner_loop_count; i++) {
             if constexpr (enable_periodic_sync) {
                 if ((i % sync_freq) == 0) {
@@ -393,16 +411,13 @@ public:
             }
             SW_BARRIER();
 #ifdef BITCOS_ALU_ONLY
-            // Walk a 4-tile window instead of streaming K: addresses still
-            // change every iteration so nothing is loop invariant and no load
-            // can be hoisted, but the working set stays in L1. Results are
-            // wrong by construction; this measures unpack throughput.
+            // Addresses still change every iteration so nothing is loop
+            // invariant and no load can be hoisted. Results are wrong by
+            // construction; this measures unpack throughput.
             matA_payload.template update_tdesc<update_dir_a>(
-                    (i & 3) == 3 ? -3 * int(matA_t::tile_size_x)
-                                 : int(matA_t::tile_size_x));
+                    BITCOS_GAMMA_STEP(i, matA_t::tile_size_x));
             matB_payload.template update_tdesc<update_dir_b>(
-                    (i & 3) == 3 ? -3 * int(matB_t::tile_size_y)
-                                 : int(matB_t::tile_size_y));
+                    BITCOS_GAMMA_STEP(i, matB_t::tile_size_y));
 #else
             matA_payload.template update_tdesc<update_dir_a>(
                     matA_t::tile_size_x);
@@ -417,11 +432,9 @@ public:
 #ifdef BITCOS_ALU_ONLY
                 // pin the prefetchers too, or they keep streaming all of B
                 matA_prefetch_payload.template update_tdesc<update_dir_a>(
-                        (i & 3) == 3 ? -3 * int(matA_t::tile_size_x)
-                                     : int(matA_t::tile_size_x));
+                        BITCOS_GAMMA_STEP(i, matA_t::tile_size_x));
                 matB_prefetch_payload.template update_tdesc<update_dir_b>(
-                        (i & 3) == 3 ? -3 * int(matB_t::tile_size_y)
-                                     : int(matB_t::tile_size_y));
+                        BITCOS_GAMMA_STEP(i, matB_t::tile_size_y));
 #else
                 matA_prefetch_payload.template update_tdesc<update_dir_a>(
                         matA_t::tile_size_x);
@@ -658,7 +671,7 @@ private:
                     xetla_vector<uint32_t, BSX> word0 = rank_ii[0] >> 5;
                     xetla_vector<uint32_t, BSX> quad_off = (off_j + word0) << 2;
 #ifdef BITCOS_ALU_ONLY
-                    quad_off = quad_off & uint32_t(0x3FFFu);
+                    quad_off = quad_off & uint32_t(BITCOS_GAMMA_SIGN_MASK);
 #endif
 #ifdef BITCOS_SIGN_GATHER3
                     xetla_vector<uint32_t, 3 * BSX> quad
@@ -704,8 +717,8 @@ private:
                         xetla_vector<uint32_t, BSX> word_off
                                 = (off_j + (rank_ii[ii] >> 5)) << 2;
 #ifdef BITCOS_ALU_ONLY
-                        // per-lane addresses still diverge, but within 16 KB
-                        word_off = word_off & uint32_t(0x3FFFu);
+                        // per-lane addresses still diverge, but stay bounded
+                        word_off = word_off & uint32_t(BITCOS_GAMMA_SIGN_MASK);
 #endif
 #ifdef BITCOS_SIGN_GATHER2
                         // lo and hi are adjacent dwords, so one d32x2 message
