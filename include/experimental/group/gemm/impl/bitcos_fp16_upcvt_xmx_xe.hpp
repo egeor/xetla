@@ -224,12 +224,14 @@ public:
                                                                    : 0;
 #endif
 #ifdef BITCOS_FP16_LUT
-#ifdef BITCOS_SLM64K_PROBE
-    // Occupancy probe for the 8-bit-index LUT: reserve the 64 KB that a
+#ifdef BITCOS_SLM64K_PROBE    // Occupancy probe for the 8-bit-index LUT: reserve the 64 KB that a
     // 2^16-entry table would need, but keep using the 2 KB table. Isolates the
     // residency cost (128 KB SLM per Xe-core, so 2 work-groups) from the
     // gather-rate and bit-expansion effects.
     static constexpr uint32_t slm_size = 64 * 1024 + 128;
+#elif defined(BITCOS_RANK_LUT)
+    // 256 entries x one dword of eight 3-bit ranks, keyed by the bitmap byte
+    static constexpr uint32_t slm_size = 256 * 4 + 128;
 #elif defined(BITCOS_INT8_LUT)
     static constexpr uint32_t slm_size = 256 * 4 + 128;
 #elif defined(BITCOS_LUT_STRIDE12)
@@ -489,7 +491,12 @@ private:
     }
 
 #ifdef BITCOS_FP16_LUT
-#ifdef BITCOS_INT8_LUT
+#ifdef BITCOS_RANK_LUT
+    static constexpr uint32_t kEntryBytes = 4;
+    static constexpr uint32_t kIdxMask = 0xFFu;
+    static constexpr uint32_t kWpMask = 0u;
+    static constexpr uint32_t kNibbleShift = 0;
+#elif defined(BITCOS_INT8_LUT)
         static constexpr uint32_t kEntryBytes = 4;
         static constexpr uint32_t kIdxMask = 0x3C0u;
         static constexpr uint32_t kWpMask = 0x3Cu;
@@ -527,6 +534,25 @@ private:
     ///
         __XETLA_API static void build_lut(uint32_t sg_idx, uint32_t slm_base) {
         xetla_vector<uint32_t, 16> lane = xetla_vector_gen<uint32_t, 16>(0, 1);
+#ifdef BITCOS_RANK_LUT
+        // entry[m8] packs rank_t = popcount(m8 & ((1<<t)-1)) for t=0..7 into
+        // eight 3-bit fields. Only the bitmap byte is needed, so the sign bits
+        // drop out of the index and one dword covers eight weights.
+#pragma unroll
+        for (uint32_t base = sg_idx * 16; base < 256; base += wg_size_x * 16) {
+            xetla_vector<uint32_t, 16> idx = lane + base;
+            xetla_vector<uint32_t, 16> packed = uint32_t(0);
+            xetla_vector<uint32_t, 16> r = uint32_t(0);
+#pragma unroll
+            for (uint32_t t = 0; t < 8; ++t) {
+                packed = packed | (r << (3 * t));
+                r = r + ((idx >> t) & uint32_t(1u));
+            }
+            xetla_store_local<uint32_t, 1>(
+                    (idx << 2) + slm_base, packed);
+        }
+        return;
+#else
 #pragma unroll
                 for (uint32_t base = sg_idx * 16; base < 256;
                                 base += wg_size_x * 16) {
@@ -585,6 +611,7 @@ private:
                         xetla_store_local<uint32_t, 1>(moff, vi);
                         xetla_store_local<uint32_t, 1>(moff + 64, vw);
                 }
+#endif
     }
 #endif
 
@@ -812,6 +839,62 @@ private:
                     xetla_vector<uint32_t, BSX> bf_width = uint32_t(1u);
 
 #ifdef BITCOS_FP16_LUT
+#ifdef BITCOS_RANK_LUT
+                    // One d32 per eight weights. The table supplies the rank of
+                    // each sign bit, which is what removes the serial chain
+                    // through w; the magnitude mask is a single sbfe and the
+                    // combine is a single bfn, so no sign values need storing.
+#pragma unroll
+                    for (uint32_t blk = 0; blk < 2 * BSY_acc / 8; ++blk) {
+                        const uint32_t bpos = blk * 8;
+                        xetla_vector<uint32_t, BSX> m8
+                                = (bmp >> bpos) & uint32_t(0xFFu);
+                        xetla_vector<uint32_t, BSX> ranks
+                                = xetla_load_local<uint32_t, 1>(
+                                        (m8 << 2) + slm_base);
+#pragma unroll
+                        for (uint32_t i = 0; i < 8; ++i) {
+                            const uint32_t c = bpos + i;
+                            xetla_vector<uint32_t, BSX> bf_offset = c;
+                            xetla_vector<uint32_t, BSX> mag_mask
+                                    = __esimd_sbfe<uint32_t, BSX>(
+                                            bf_width.data(), bf_offset.data(),
+                                            bmp.data());
+                            xetla_vector<uint32_t, BSX> rank
+                                    = (ranks >> (3 * i)) & uint32_t(7u);
+                            xetla_vector<uint32_t, BSX> sign_xor
+                                    = (w >> rank) << 15;
+                            xetla_vector<uint32_t, BSX> result
+                                    = sycl::ext::intel::esimd::bfn<make_value>(
+                                            scale32, sign_xor, mag_mask);
+                            if (c < BSY_acc) {
+#ifdef BITCOS_FP_STORE
+                                dst_lo.xetla_select<BSX, 2>(
+                                        (c >> 1) * 2u * BSX + (c & 1u))
+                                        = result.xetla_format<fp16>()
+                                                  .xetla_select<BSX, 2>(0);
+#else
+                                dst_lo_u16.xetla_select<BSX, 2>(
+                                        (c >> 1) * 2u * BSX + (c & 1u))
+                                        = result;
+#endif
+                            } else {
+                                const uint32_t cc = c - BSY_acc;
+#ifdef BITCOS_FP_STORE
+                                dst_hi.xetla_select<BSX, 2>(
+                                        (cc >> 1) * 2u * BSX + (cc & 1u))
+                                        = result.xetla_format<fp16>()
+                                                  .xetla_select<BSX, 2>(0);
+#else
+                                dst_hi_u16.xetla_select<BSX, 2>(
+                                        (cc >> 1) * 2u * BSX + (cc & 1u))
+                                        = result;
+#endif
+                            }
+                        }
+                        w = w >> sycl::ext::intel::esimd::cbit(m8);
+                    }
+#else
                     constexpr bfn_t merge_masked
                             = (bfn_t::x & bfn_t::y) | bfn_t::z;
                     auto dst_lo_u32 = dst_lo.xetla_format<uint32_t>();
@@ -968,6 +1051,7 @@ private:
 #endif
 #endif
                     }
+#endif
 #else
 #pragma unroll
                     for (uint32_t c = 0; c < BSY_acc; ++c) {
