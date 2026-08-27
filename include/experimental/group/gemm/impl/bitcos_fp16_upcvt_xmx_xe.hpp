@@ -232,10 +232,18 @@ public:
 #elif defined(BITCOS_RANK_LUT)
     // 256 entries x one dword of eight 3-bit ranks, keyed by the bitmap byte
     static constexpr uint32_t slm_size = 256 * 4 + 128;
+#elif defined(BITCOS_LUT_HI8)
+    // One byte per weight: every fp16 code is 0x0000/0x3C00/0xBC00, so the low
+    // byte carries no information and only the high byte is stored.
+    static constexpr uint32_t slm_size = 256 * 4 + 128;
 #elif defined(BITCOS_INT8_LUT)
     static constexpr uint32_t slm_size = 256 * 4 + 128;
 #elif defined(BITCOS_LUT_STRIDE12)
     static constexpr uint32_t slm_size = 256 * 12 + 128;
+#elif defined(BITCOS_BASE_OR)
+    // Padded to 4 KB so every k-slice's base is a multiple of the 2 KB table;
+    // that is what makes OR-ing the base into the index equal to adding it.
+    static constexpr uint32_t slm_size = 4096;
 #else
     static constexpr uint32_t slm_size = 256 * 8 + 128;
 #endif
@@ -467,7 +475,23 @@ public:
             dequantize(matB_acc, matB, scale, args.signs_base, col_off, rank);
 #endif
             SW_BARRIER();
+#if defined(BITCOS_HOIST_SCALE) && defined(BITCOS_FP16_LUT)
+            static_assert(matAcc_t::tile_size_y == 1,
+                    "BITCOS_HOIST_SCALE assumes a single accumulator row");
+            static_assert(
+                    (uint32_t)matAcc_t::tile_size_x == (uint32_t)scale_t::tile_size_x,
+                    "accumulator and scale must span the same N");
+            {
+                matAcc_t tmp_acc;
+                tmp_acc.reg = 0;
+                tile_mma::mma(tmp_acc, tmp_acc, matB_acc, matA_acc);
+                xetla_vector<dtype_mma_acc, matAcc_t::tile_size_x> sc_f
+                        = scale.reg.xetla_select<matAcc_t::tile_size_x, 1>(0);
+                matAcc.reg = matAcc.reg + tmp_acc.reg * sc_f;
+            }
+#else
             tile_mma::mma(matAcc, matAcc, matB_acc, matA_acc);
+#endif
             SW_BARRIER();
             if constexpr (enable_periodic_sync) {
                 if ((i % sync_freq) == 0) {
@@ -496,6 +520,11 @@ private:
     static constexpr uint32_t kIdxMask = 0xFFu;
     static constexpr uint32_t kWpMask = 0u;
     static constexpr uint32_t kNibbleShift = 0;
+#elif defined(BITCOS_LUT_HI8)
+        static constexpr uint32_t kEntryBytes = 4;
+        static constexpr uint32_t kIdxMask = 0x3C0u;
+        static constexpr uint32_t kWpMask = 0x3Cu;
+        static constexpr uint32_t kNibbleShift = 6;
 #elif defined(BITCOS_INT8_LUT)
         static constexpr uint32_t kEntryBytes = 4;
         static constexpr uint32_t kIdxMask = 0x3C0u;
@@ -574,7 +603,10 @@ private:
             for (uint32_t t = 0; t < 4; ++t) {
                 xetla_vector<uint32_t, 16> neg
                         = (s4 >> rk[t]) & uint32_t(1u);
-#ifdef BITCOS_INT8_LUT
+#ifdef BITCOS_LUT_HI8
+                code[t] = (uint32_t(0x3Cu) | (neg << 7))
+                        & (uint32_t(0) - pres[t]);
+#elif defined(BITCOS_INT8_LUT)
                 code[t] = (uint32_t(1u) | (uint32_t(0) - neg))
                         & (uint32_t(0) - pres[t]);
 #else
@@ -584,7 +616,7 @@ private:
             }
             xetla_vector<uint32_t, 16> off
                     = idx * uint32_t(kEntryBytes) + slm_base;
-#ifdef BITCOS_INT8_LUT
+#if defined(BITCOS_INT8_LUT) || defined(BITCOS_LUT_HI8)
             xetla_vector<uint32_t, 16> d0 = code[0] | (code[1] << 8)
                     | (code[2] << 16) | (code[3] << 24);
             xetla_store_local<uint32_t, 1>(off, d0);
@@ -913,16 +945,32 @@ private:
                     }
 #endif
 #ifdef BITCOS_SPLIT_SIGN_CHAIN
-                    xetla_vector<uint32_t, BSX> w_chain[2];
+#ifdef BITCOS_SIGN_CHAINS
+                    constexpr uint32_t kChains = BITCOS_SIGN_CHAINS;
+#else
+                    constexpr uint32_t kChains = 2;
+#endif
+                    // Chain c's start is popcount of everything before its
+                    // quarter/half, which needs no walk, so the cursors are
+                    // independent and their gathers overlap.
+                    constexpr uint32_t kChainBits
+                            = (4 * (2 * BSY_acc / 4)) / kChains;
+                    xetla_vector<uint32_t, BSX> w_chain[kChains];
                     w_chain[0] = w;
-                    xetla_vector<uint32_t, BSX> bmp_lo16
-                            = bmp & uint32_t(0xFFFFu);
-                    w_chain[1] = w >> sycl::ext::intel::esimd::cbit(bmp_lo16);
+#pragma unroll
+                    for (uint32_t c = 1; c < kChains; ++c) {
+                        const uint32_t pm = (kChainBits * c >= 32)
+                                ? 0xFFFFFFFFu
+                                : ((uint32_t(1) << (kChainBits * c)) - 1);
+                        w_chain[c] = w
+                                >> sycl::ext::intel::esimd::cbit(
+                                        bmp & pm);
+                    }
 #endif
                     // a 2-element gather returns transposed data, so the scale
                     // repeats per dword half rather than per lane group
                     xetla_vector<fp16, 4 * BSX> sc_rep;
-#ifdef BITCOS_INT8_LUT
+#if defined(BITCOS_INT8_LUT) || defined(BITCOS_LUT_HI8)
                     sc_rep.xetla_select<BSX, 4>(0) = scale_vec;
                     sc_rep.xetla_select<BSX, 4>(1) = scale_vec;
                     sc_rep.xetla_select<BSX, 4>(2) = scale_vec;
@@ -942,6 +990,11 @@ private:
                     // added back. Results are wrong by construction.
                     xetla_vector<uint32_t, 2 * BSX> e_keep;
 #endif
+#ifdef BITCOS_HI8_STRIDED
+                    // Only the high byte of each code is ever written below,
+                    // so the low bytes stay zero after this one init.
+                    xetla_vector<uint16_t, 4 * BSX> hi_acc = 0;
+#endif
 #pragma unroll
                     for (uint32_t g = 0; g < 2 * BSY_acc / 4; ++g) {
                         constexpr uint32_t kGroups = 2 * BSY_acc / 4;
@@ -949,7 +1002,7 @@ private:
 #ifdef BITCOS_PREFIX_SIGN_OFFSETS
                         auto &w_cur = w_group[g];
 #elif defined(BITCOS_SPLIT_SIGN_CHAIN)
-                                                auto &w_cur = w_chain[g / (kGroups / 2)];
+                                                auto &w_cur = w_chain[g / (kGroups / kChains)];
 #else
                                                 auto &w_cur = w;
 #endif
@@ -962,10 +1015,15 @@ private:
                                 ? 0u
                                 : (bpos - kNibbleShift);
                         xetla_vector<uint32_t, BSX> tsh = (bmp << sl) >> sr;
-#ifdef BITCOS_INT8_LUT
+#if defined(BITCOS_INT8_LUT) || defined(BITCOS_LUT_HI8)
                         xetla_vector<uint32_t, BSX> wp = (w_cur << 2) & c_wp;
 #elif defined(BITCOS_LUT_STRIDE12)
                         xetla_vector<uint32_t, BSX> wp = w_cur & c_wp;
+#elif defined(BITCOS_BASE_OR)
+                        xetla_vector<uint32_t, BSX> c_base = slm_base;
+                        xetla_vector<uint32_t, BSX> wp
+                                = sycl::ext::intel::esimd::bfn<merge_masked>(
+                                        w_cur << 3, c_wp, c_base);
 #else
                         xetla_vector<uint32_t, BSX> wp = (w_cur << 3) & c_wp;
 #endif
@@ -978,7 +1036,29 @@ private:
 #ifdef BITCOS_LUT_STRIDE12
                         off = off * uint32_t(kEntryBytes);
 #endif
-#ifdef BITCOS_INT8_LUT
+#ifdef BITCOS_LUT_HI8
+                        // Half the SLM payload of the 8 B entry: one d32 per
+                        // four weights. Widening the byte and shifting it back
+                        // up rebuilds the fp16 pattern without leaving the
+                        // integer pipe, so no int-to-float convert is needed.
+                        xetla_vector<uint32_t, BSX> e
+                                = xetla_load_local<uint32_t, 1>(off + slm_base);
+#ifdef BITCOS_HI8_STRIDED
+                        // Landing the byte in the odd lane is the <<8, so the
+                        // widen and the shift collapse into one strided mov.
+                        hi_acc.xetla_format<uint8_t>()
+                                .xetla_select<4 * BSX, 2>(1)
+                                = e.xetla_format<uint8_t>();
+                        xetla_vector<fp16, 4 * BSX> code
+                                = hi_acc.xetla_format<fp16>();
+#else
+                        xetla_vector<uint16_t, 4 * BSX> hi
+                                = e.xetla_format<uint8_t>();
+                        hi = hi << 8;
+                        xetla_vector<fp16, 4 * BSX> code
+                                = hi.xetla_format<fp16>();
+#endif
+#elif defined(BITCOS_INT8_LUT)
                         xetla_vector<uint32_t, BSX> e
                                 = xetla_load_local<uint32_t, 1>(off + slm_base);
                         xetla_vector<int8_t, 4 * BSX> code_i8
@@ -1002,8 +1082,13 @@ private:
                         }
                         xetla_vector<uint32_t, 2 * BSX> e = e_keep;
 #else
+#ifdef BITCOS_BASE_OR
+                        xetla_vector<uint32_t, 2 * BSX> e
+                                = xetla_load_local<uint32_t, 2>(off);
+#else
                         xetla_vector<uint32_t, 2 * BSX> e
                                 = xetla_load_local<uint32_t, 2>(off + slm_base);
+#endif
 #endif
 #ifdef BITCOS_LUT_EMBED_COUNT
                         xetla_vector<uint32_t, BSX> count
@@ -1015,11 +1100,27 @@ private:
                         xetla_vector<fp16, 4 * BSX> code
                                 = e.xetla_format<fp16>();
 #endif
+#if defined(BITCOS_DIRECT_TILE) && defined(BITCOS_HOIST_SCALE)                 \
+        && !defined(BITCOS_INT8_LUT) && !defined(BITCOS_LUT_HI8)
+                        // With the scale hoisted the entry needs no arithmetic
+                        // at all, and its two halves land contiguously at o, so
+                        // the gather can target the tile registers directly.
+                        const uint32_t o = (g % (kGroups / 2)) * 2 * BSX;
+                        if (g < kGroups / 2) {
+                            dst_lo_u32.xetla_select<2 * BSX, 1>(o) = e;
+                        } else {
+                            dst_hi_u32.xetla_select<2 * BSX, 1>(o) = e;
+                        }
+#else
+#ifdef BITCOS_HOIST_SCALE
+                        xetla_vector<fp16, 4 * BSX> v = code;
+#else
                         xetla_vector<fp16, 4 * BSX> v = code * sc_rep;
+#endif
                         auto vd = v.xetla_format<uint32_t>();
                         const uint32_t o = (g % (kGroups / 2)) * 2 * BSX;
                         if (g < kGroups / 2) {
-#ifdef BITCOS_INT8_LUT
+#if defined(BITCOS_INT8_LUT) || defined(BITCOS_LUT_HI8)
                             dst_lo_u32.xetla_select<BSX, 1>(o)
                                     = vd.xetla_select<BSX, 2>(0);
                             dst_lo_u32.xetla_select<BSX, 1>(o + BSX)
@@ -1031,7 +1132,7 @@ private:
                                     = vd.xetla_select<BSX, 1>(BSX);
 #endif
                         } else {
-#ifdef BITCOS_INT8_LUT
+#if defined(BITCOS_INT8_LUT) || defined(BITCOS_LUT_HI8)
                             dst_hi_u32.xetla_select<BSX, 1>(o)
                                     = vd.xetla_select<BSX, 2>(0);
                             dst_hi_u32.xetla_select<BSX, 1>(o + BSX)
@@ -1043,6 +1144,7 @@ private:
                                     = vd.xetla_select<BSX, 1>(BSX);
 #endif
                         }
+#endif
 #ifndef BITCOS_PREFIX_SIGN_OFFSETS
 #ifdef BITCOS_LUT_EMBED_COUNT
                         w_cur = w_cur >> count;
