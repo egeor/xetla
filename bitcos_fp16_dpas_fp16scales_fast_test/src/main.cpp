@@ -773,6 +773,10 @@ void run_gemm(const RunConfig &cfg) {
         // Wide subgroup probes; these are expected to stress GRF capacity.
         DISPATCH(256, 64, 64, 8) DISPATCH(512, 64, 64, 4)
         DISPATCH(1024, 32, 64, 1) DISPATCH(1024, 64, 64, 2)
+#elif BITCOS_TUNING_GROUP == 11
+        // Tiles the vllm decode dispatcher can select but no other group
+        // instantiated, so they were unmeasurable until now.
+        DISPATCH_K(128, 16, 8)  DISPATCH_K(256, 16, 4)
 #else
 #error "unsupported BITCOS_TUNING_GROUP"
 #endif
