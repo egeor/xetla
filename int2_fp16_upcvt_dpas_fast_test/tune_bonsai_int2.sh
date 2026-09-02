@@ -18,6 +18,11 @@ PLAT=${PLAT:-unknown}
 
 SHAPES_8B="qkv_proj:4096:6144 gate_up_proj:4096:24576 down_proj:12288:4096 lm_head:4096:151680"
 SHAPES_27B="mlp.gate_up_proj:5120:34816 mlp.down_proj:17408:5120 linear_attn.in_proj_qkvz:5120:16384 linear_attn.out_proj:6144:5120 self_attn.qkv_proj:5120:14336 lm_head:5120:248320"
+# Shapes as seen by the dispatcher at decode, not as stored in the IR: the
+# plugin fuses q/k/v into one N=4096 GEMV and gate+up into N=12288, and pads
+# the lm_head to 151680.
+SHAPES_1P7B="qkv_proj:2048:4096 o_proj:2048:2048 gate_up_proj:2048:12288 down_proj:6144:2048 lm_head:2048:151680"
+SHAPES_4B="qkv_proj:2560:6144 o_proj:4096:2560 gate_up_proj:2560:19456 down_proj:9728:2560 lm_head:2560:151680"
 
 # (wg_n, KS, LS) combinations the int2 driver instantiates
 CONFIGS="32:1:1 32:1:2 32:1:4 32:1:8 32:2:4 32:4:2 \
